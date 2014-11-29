@@ -51,8 +51,9 @@ int main() {
     nfds = epoll_wait(epfd, events, 20, 500);
     for (int i = 0; i < nfds; ++i) {
       if (events[i].events & EPOLLIN) {
-        printf("data in!");        
+        fprintf(stderr, "data in!\n");        
       } else if (events[i].events & EPOLLOUT) {
+        /*
         if (sendto(inet_sock, BROAD_CONTENT, strlen(BROAD_CONTENT), 0, (struct sockaddr*)&si_client, sizeof(si_client)) < 0) {
           perror("Broadcast send error!");
           close(inet_sock);
@@ -61,6 +62,7 @@ int main() {
         printf("Send successfully!\n");
         close(inet_sock);
         return 0;
+        */
       }
     }
   }
