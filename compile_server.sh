@@ -1,3 +1,4 @@
 #! /bin/bash
 
-g++ udp_file_server.cc -o udp_file_server
+rm -rf ufbp_server
+g++ ufbp_server.cc socket_util.cc -o ufbp_server

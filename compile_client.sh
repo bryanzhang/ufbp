@@ -1,3 +1,4 @@
 #! /bin/bash
 
-g++ udp_file_client.cc -o udp_file_client
+rm -rf ufbp_client
+g++ ufbp_client.cc -o ufbp_client

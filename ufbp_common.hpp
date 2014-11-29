@@ -1,0 +1,7 @@
+#ifndef UFBP_COMMON_HPP_
+#define UFBP_COMMON_HPP_
+
+#define UFBP_SERVER_PORT 7752
+#define UFBP_CLIENT_PORT 7753
+
+#endif // UFBP_COMMON_HPP_
