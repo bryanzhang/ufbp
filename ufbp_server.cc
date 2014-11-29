@@ -32,25 +32,38 @@ int main() {
     close(inet_sock);
     return 1;
   }
-
   setnonblocking(inet_sock);
 
   si_client.sin_family = AF_INET;
   si_client.sin_port = htons(UFBP_CLIENT_PORT);
   si_client.sin_addr.s_addr = htonl(-1);
 
-  if (sendto(inet_sock, BROAD_CONTENT, strlen(BROAD_CONTENT), 0, (struct sockaddr*)&si_client, sizeof(si_client)) < 0) {
-    perror("Broadcast send error!");
-    close(inet_sock);
-    return 1;
-  }
-  printf("Send successfully!\n");
-  close(inet_sock);
-
-/*
-  // create epoll.
+  // create epoll and register.
   struct epoll_event ev, events[20];
   int epfd = epoll_create(256);
-  ev.data.fd = socket;
-*/
+  ev.data.fd = inet_sock;
+  ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+  epoll_ctl(epfd,EPOLL_CTL_ADD, inet_sock, &ev);
+
+
+  int nfds;
+  for (; ;) {
+    nfds = epoll_wait(epfd, events, 20, 500);
+    for (int i = 0; i < nfds; ++i) {
+      if (events[i].events & EPOLLIN) {
+        printf("data in!");        
+      } else if (events[i].events & EPOLLOUT) {
+        if (sendto(inet_sock, BROAD_CONTENT, strlen(BROAD_CONTENT), 0, (struct sockaddr*)&si_client, sizeof(si_client)) < 0) {
+          perror("Broadcast send error!");
+          close(inet_sock);
+          return 1;
+        }
+        printf("Send successfully!\n");
+        close(inet_sock);
+        return 0;
+      }
+    }
+  }
+
+  return 0;
 }
