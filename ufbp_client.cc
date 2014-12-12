@@ -28,7 +28,6 @@ unsigned char* buffer = new unsigned char[BUFFER_SIZE];
 
 bool sendRequestPacket(int socket, char* host, char* uri) {
   int totalLen = reqpack_init((PackHeader*)buffer, uri);
-  int remaining = totalLen;
   int ret;
   unsigned char* pos = buffer;
   struct sockaddr_in si_server;
@@ -36,18 +35,18 @@ bool sendRequestPacket(int socket, char* host, char* uri) {
   si_server.sin_port = htons(UFBP_SERVER_PORT);
   // TODO(junhaozhang): support name resolve.
   si_server.sin_addr.s_addr = inet_addr(host);
-  while (remaining > 0) {
-    ret = sendto(socket, pos, remaining, 0, (struct sockaddr*)&si_server, sizeof(si_server));
+  for (; ;) {
+    ret = sendto(socket, pos, totalLen, 0, (struct sockaddr*)&si_server, sizeof(si_server));
     if (ret < 0) {
       if (errno == EAGAIN) {
         continue;
       }
       return false;
+    } else if (ret != totalLen) {
+      return false;
     }
-    remaining -= ret;
-    pos += ret;
+    return true;
   }
-  return true;
 }
 
 
