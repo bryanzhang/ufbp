@@ -10,57 +10,114 @@
 #include "socket_util.hpp"
 #include "server_states.hpp"
 #include "reqpack.hpp"
+#include "respack.hpp"
 
-int recvData(int socket) {
-  struct sockaddr_in from;
-  int socklen;
-  int remaining = sizeof(g_svStates.buffer);
-  unsigned char* pos = g_svStates.buffer;
-  while (remaining > 0) {
-    int ret = recvfrom(socket, pos, sizeof(g_svStates.buffer), 0,
-      (struct sockaddr*)&from, (socklen_t*)&socklen);
-    if (ret <= 0) {
-      break;
-    }  else if (ret >= sizeof(PackHeader)) {
-      remaining -= ret;
-      BufferUnit unit = { pos, ret };
-      g_svStates.bufQueue.push(unit);
-      pos += ret;
-    }
-  }
-  return pos - g_svStates.buffer;
-}
-
-void handleData() {
-  // TODO(junhaozhang): process in multi-threads.
-  while (!g_svStates.bufQueue.empty()) {
-    BufferUnit unit = g_svStates.bufQueue.front();
-    g_svStates.bufQueue.pop();
-    PackHeader* pack = (PackHeader*)unit.pos;
-    if (pack->len != unit.len) {
-      fprintf(stderr, "WARNING: pack len %d != bufferlen %d\n", pack->len, unit.len);
-      continue;
-    }
-    if (pack->len < sizeof(PackHeader)) {
-      fprintf(stderr, "WARNING: pack len %d < %d\n", pack->len, sizeof(PackHeader));
-      continue;
-    }
-
+bool handleTcpPacket(TcpSocketState& state, PackHeader* pack) {
+  if (state.state == 0) {
+    fprintf(stderr, "Pack len:%d\n", (int)pack->len);
     int len = pack->len - sizeof(PackHeader);
     if (!memcmp(pack->type, REQPACK_TYPE, PACKTYPE_LENGTH)) {
       if (len < sizeof(ReqPackHeader)) {
         fprintf(stderr, "WARNING: req pack len %d < %d\n", len, sizeof(ReqPackHeader));
-        continue;
+        return false;
       }
       ReqPackHeader* req = (ReqPackHeader*)(pack + 1);
       len -= sizeof(ReqPackHeader);
       fprintf(stderr, "recv req: %d, %*s\n", req->reqId, len, (char*)(req + 1));
-      PullRequest pq = { req->reqId, (char*)(req + 1), len };
-      g_svStates.reqQueue.push(pq);
-    } else {
-      // TODO(junhaozhang):
+
+      // TODO(junhaozhang):马上生成resId,获取文件相关信息,发送回复
+      int remaining = respack_init(pack, 200, 1000, 1024 * 1024, 1000000);
+      unsigned char* pos = state.outBuffer;
+      int ret;
+      while (remaining > 0) {
+        ret = write(state.socket, pos, remaining);
+        if (ret < 0) {
+          if (errno == EAGAIN) {
+            continue;
+          } else {
+            perror("Send socket error");
+            return false;
+          }
+        } else if (ret == 0) {
+          fprintf(stderr, "remote Socket closed!\n");
+          return false;
+        } else {
+          remaining -= ret;
+          pos += ret;
+        }
+      }
+      fprintf(stderr, "Response packet sent, state turns 1!\n");
+      state.state = 1;
+      return true;
     }
-  } 
+
+    fprintf(stderr, "Unexpected packet type:%.*s\n", PACKTYPE_LENGTH, pack->type);
+    return false;
+  }
+}
+
+void recvTcpPacket(TcpSocketState& state) {
+  unsigned char* pos = state.buffer + state.bufferPos;
+  int remaining = sizeof(state.buffer) - state.bufferPos;
+  int ret;
+  while (remaining > 0) {
+    ret = read(state.socket, pos, remaining);
+    if (ret < 0) {
+      if (errno == EAGAIN) {
+        break;
+      }
+      __gnu_cxx::hash_map<int, TcpSocketState*>::iterator itr = g_svStates.socketsPool.find(state.state);
+      g_svStates.socketsPool.erase(itr);
+      close(state.socket);
+      struct epoll_event ev;
+      ev.data.fd = state.socket;
+      ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+      epoll_ctl(g_svStates.epfd, EPOLL_CTL_DEL, state.socket, &ev);
+      delete itr->second;
+      return;
+    } else if (ret == 0) {
+      __gnu_cxx::hash_map<int, TcpSocketState*>::iterator itr = g_svStates.socketsPool.find(state.state);
+      g_svStates.socketsPool.erase(itr);
+      close(state.socket);
+      struct epoll_event ev;
+      ev.data.fd = state.socket;
+      ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+      epoll_ctl(g_svStates.epfd, EPOLL_CTL_DEL, state.socket, &ev);
+      delete itr->second;
+      return;      
+    } else {
+      pos += ret;
+      remaining -= ret;
+    }
+  }
+  state.bufferPos = pos - state.buffer;
+
+  for (; ;) {
+    // 攒够1帧才处理
+    if (state.bufferPos - state.readPos < sizeof(PackHeader)) {
+      break;
+    }
+
+    PackHeader* header = (PackHeader*)(state.buffer + state.readPos); 
+    if (state.bufferPos - state.readPos < header->len) {
+      break;
+    }
+
+    if (!handleTcpPacket(state, header)) {
+      fprintf(stderr, "Exception occurs when handle input socket, socket=%d\n", state.socket);
+      __gnu_cxx::hash_map<int, TcpSocketState*>::iterator itr = g_svStates.socketsPool.find(state.socket);
+      delete itr->second;
+      g_svStates.socketsPool.erase(itr);
+      return;
+    }
+
+    state.readPos += header->len;
+  }
+  if (state.readPos >= sizeof(state.buffer) / 2) {
+    memcpy(state.buffer, state.buffer + state.readPos, state.bufferPos - state.readPos);
+    state.bufferPos -= state.readPos;
+    state.readPos = 0;
+  }
 }
 
 void putReqsToSchedul() {
@@ -141,20 +198,20 @@ int main() {
   si_client.sin_addr.s_addr = htonl(-1);
 
   // create epoll and register.
-  struct epoll_event ev, events[20];
-  int epfd = epoll_create(256);
+  g_svStates.epfd = epoll_create(256);
+  struct epoll_event ev;
   ev.data.fd = g_svStates.socket;
   ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-  epoll_ctl(epfd, EPOLL_CTL_ADD, g_svStates.socket, &ev);
+  epoll_ctl(g_svStates.epfd, EPOLL_CTL_ADD, g_svStates.socket, &ev);
   ev.data.fd = g_svStates.tcpSocket;
   ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-  epoll_ctl(epfd, EPOLL_CTL_ADD, g_svStates.tcpSocket, &ev);
+  epoll_ctl(g_svStates.epfd, EPOLL_CTL_ADD, g_svStates.tcpSocket, &ev);
 
   int nfds;
   for (; ;) {
-    nfds = epoll_wait(epfd, events, 20, 500);
+    nfds = epoll_wait(g_svStates.epfd, g_svStates.events, 20, 500);
     for (int i = 0; i < nfds; ++i) {
-      if (events[i].data.fd == g_svStates.tcpSocket) {
+      if (g_svStates.events[i].data.fd == g_svStates.tcpSocket) {
         struct sockaddr_in local;
         int len = sizeof(sockaddr_in);
         int socket = accept(g_svStates.tcpSocket, (struct sockaddr*)&local, (socklen_t*)&len);
@@ -163,21 +220,37 @@ int main() {
         } else {
           fprintf(stderr, "Accept!%d\n", socket);
           setnonblocking(socket);
-          epoll_ctl(epfd, EPOLL_CTL_ADD, socket, &ev);
+          ev.data.fd = socket;
+          ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+          epoll_ctl(g_svStates.epfd, EPOLL_CTL_ADD, socket, &ev);
+          __gnu_cxx::hash_map<int, TcpSocketState*>::iterator itr = g_svStates.socketsPool.find(socket);
+          if (itr != g_svStates.socketsPool.end()) {
+            delete itr->second;
+            g_svStates.socketsPool.erase(itr);
+          }
+          TcpSocketState* state = new TcpSocketState();
+          state->socket = socket;
+          state->state = 0;
+          state->bufferPos = 0;
+          state->readPos = 0;
+          g_svStates.socketsPool[socket] = state;
         }
         continue;
       }
 
-      if (events[i].data.fd == g_svStates.socket) {
+      if (g_svStates.events[i].data.fd == g_svStates.socket) {
         continue;
       }
 
-      if (events[i].events & EPOLLIN) {
-        int len = recvData(g_svStates.socket);
-        if (len > 0) {
-          handleData();
-        }
-      } else if (events[i].events & EPOLLOUT) {
+/*
+      if (g_svStates.socketsPool.find(socket) == g_svStates.socketsPool.end()) {
+        continue;
+      }
+*/
+
+      if (g_svStates.events[i].events & EPOLLIN) {
+        recvTcpPacket(*g_svStates.socketsPool[g_svStates.events[i].data.fd]);
+      } else if (g_svStates.events[i].events & EPOLLOUT) {
         /*
         if (sendto(g_svStates.socket, BROAD_CONTENT, strlen(BROAD_CONTENT), 0, (struct sockaddr*)&si_client, sizeof(si_client)) < 0) {
           perror("Broadcast send error!");

@@ -26,30 +26,6 @@ enum DownloadStatus {
 DownloadStatus status = INIT;
 unsigned char* buffer = new unsigned char[BUFFER_SIZE];
 
-/*
-bool sendRequestPacket(int socket, char* host, char* uri) {
-  int totalLen = reqpack_init((PackHeader*)buffer, uri);
-  int ret;
-  unsigned char* pos = buffer;
-  struct sockaddr_in si_server;
-  si_server.sin_family = AF_INET;
-  si_server.sin_port = htons(UFBP_SERVER_PORT);
-  // TODO(junhaozhang): support name resolve.
-  si_server.sin_addr.s_addr = inet_addr(host);
-  for (; ;) {
-    ret = sendto(socket, pos, totalLen, 0, (struct sockaddr*)&si_server, sizeof(si_server));
-    if (ret < 0) {
-      if (errno == EAGAIN) {
-        continue;
-      }
-      return false;
-    } else if (ret != totalLen) {
-      return false;
-    }
-    return true;
-  }
-}
-*/
 bool sendRequestPacket(int socket, char* uri) {
   int ret;
   unsigned char* pos = buffer;
@@ -62,7 +38,10 @@ bool sendRequestPacket(int socket, char* uri) {
       } else {
         return false;
       }
+    } else if (ret == 0) {
+      return false;
     }
+
     pos += ret;
     remaining -= ret;
   }

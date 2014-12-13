@@ -2,6 +2,7 @@
 #define PACK_H_
 
 #define REQPACK_TYPE "PULL"
+#define RESPACK_TYPE "RESP"
 
 #pragma pack(push)
 #pragma pack(1)

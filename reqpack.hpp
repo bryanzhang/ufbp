@@ -7,7 +7,7 @@
 #pragma pack(push)
 #pragma pack(1)
 struct ReqPackHeader {
-  unsigned long reqId;
+  unsigned long reqId;  // TODO(junhaozhang): reqId不需要了
 };
 #pragma pack(pop)
 
