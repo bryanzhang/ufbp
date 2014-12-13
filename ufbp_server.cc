@@ -87,7 +87,7 @@ void cron() {
 }
 
 int main() {
-  // create socket and bind.
+  // create udp socket and bind.
   int so_broadcast = 1;
   struct sockaddr_in si_server, si_client;
   if ((g_svStates.socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
@@ -110,6 +110,32 @@ int main() {
   }
   setnonblocking(g_svStates.socket);
 
+  // create tcp socket and bind.
+  if ((g_svStates.tcpSocket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    perror("TCP server socket created socket error");
+    return 1;
+  }
+  int opt = SO_REUSEADDR;
+  if (setsockopt(g_svStates.tcpSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    perror("TCP server set socket error");
+    close(g_svStates.tcpSocket);
+    return 1;
+  }
+
+  si_server.sin_family = AF_INET;
+  si_server.sin_port = htons(UFBP_SERVER_TCP_PORT);
+  si_server.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(g_svStates.tcpSocket, (struct sockaddr*)&si_server, sizeof(si_server)) == -1) {
+    perror("Bind tcp port error");
+    close(g_svStates.tcpSocket);
+    return 1;
+  }
+  if (listen(g_svStates.tcpSocket, 128) == -1) {
+    perror("Listen error");
+    close(g_svStates.tcpSocket);
+    return 1;
+  }
+
   si_client.sin_family = AF_INET;
   si_client.sin_port = htons(UFBP_CLIENT_PORT);
   si_client.sin_addr.s_addr = htonl(-1);
@@ -119,12 +145,33 @@ int main() {
   int epfd = epoll_create(256);
   ev.data.fd = g_svStates.socket;
   ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-  epoll_ctl(epfd,EPOLL_CTL_ADD, g_svStates.socket, &ev);
+  epoll_ctl(epfd, EPOLL_CTL_ADD, g_svStates.socket, &ev);
+  ev.data.fd = g_svStates.tcpSocket;
+  ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+  epoll_ctl(epfd, EPOLL_CTL_ADD, g_svStates.tcpSocket, &ev);
 
   int nfds;
   for (; ;) {
     nfds = epoll_wait(epfd, events, 20, 500);
     for (int i = 0; i < nfds; ++i) {
+      if (events[i].data.fd == g_svStates.tcpSocket) {
+        struct sockaddr_in local;
+        int len = sizeof(sockaddr_in);
+        int socket = accept(g_svStates.tcpSocket, (struct sockaddr*)&local, (socklen_t*)&len);
+        if (socket == -1) {
+          perror("Accept failure");
+        } else {
+          fprintf(stderr, "Accept!%d\n", socket);
+          setnonblocking(socket);
+          epoll_ctl(epfd, EPOLL_CTL_ADD, socket, &ev);
+        }
+        continue;
+      }
+
+      if (events[i].data.fd == g_svStates.socket) {
+        continue;
+      }
+
       if (events[i].events & EPOLLIN) {
         int len = recvData(g_svStates.socket);
         if (len > 0) {

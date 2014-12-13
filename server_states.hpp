@@ -17,11 +17,12 @@ struct PullRequest {
 
 struct ServerStates {
   int socket;
+  int tcpSocket;
   unsigned char buffer[BUFFER_SIZE];
   std::queue<BufferUnit> bufQueue;
   std::queue<PullRequest> reqQueue;
 
-  inline ServerStates() : socket(-1), bufQueue(), reqQueue() {
+  inline ServerStates() : socket(-1), tcpSocket(-1), bufQueue(), reqQueue() {
   }
 };
 
