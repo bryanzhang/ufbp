@@ -26,7 +26,7 @@ bool handleTcpPacket(TcpSocketState& state, PackHeader* pack) {
       fprintf(stderr, "recv req: %d, %*s\n", req->reqId, len, (char*)(req + 1));
 
       // TODO(junhaozhang):马上生成resId,获取文件相关信息,发送回复
-      int remaining = respack_init(pack, 200, 1000, 1024 * 1024, 1000000);
+      int remaining = respack_init((PackHeader*)state.outBuffer, 200, 1000, 1024 * 1024, 1000000);
       unsigned char* pos = state.outBuffer;
       int ret;
       while (remaining > 0) {
@@ -66,6 +66,7 @@ void recvTcpPacket(TcpSocketState& state) {
       if (errno == EAGAIN) {
         break;
       }
+      perror("Read socket error");
       __gnu_cxx::hash_map<int, TcpSocketState*>::iterator itr = g_svStates.socketsPool.find(state.state);
       g_svStates.socketsPool.erase(itr);
       close(state.socket);
@@ -76,14 +77,15 @@ void recvTcpPacket(TcpSocketState& state) {
       delete itr->second;
       return;
     } else if (ret == 0) {
+      fprintf(stderr, "Remote socket closed!\n");
       __gnu_cxx::hash_map<int, TcpSocketState*>::iterator itr = g_svStates.socketsPool.find(state.state);
       g_svStates.socketsPool.erase(itr);
-      close(state.socket);
       struct epoll_event ev;
       ev.data.fd = state.socket;
       ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
       epoll_ctl(g_svStates.epfd, EPOLL_CTL_DEL, state.socket, &ev);
       delete itr->second;
+      close(state.socket);
       return;      
     } else {
       pos += ret;
