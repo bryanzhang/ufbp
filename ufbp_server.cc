@@ -11,6 +11,31 @@
 #include "server_states.hpp"
 #include "reqpack.hpp"
 #include "respack.hpp"
+#include "fileinfo.hpp"
+
+bool sendRespPacket(int socket, unsigned char* buffer, unsigned short code, unsigned long resId, unsigned long fileLength, unsigned long lastModifiedDate) {
+  int remaining = respack_init((PackHeader*)buffer, code, resId, fileLength, lastModifiedDate);
+  unsigned char* pos = buffer;
+  int ret;
+  while (remaining > 0) {
+    ret = write(socket, pos, remaining);
+    if (ret < 0) {
+      if (errno == EAGAIN) {
+        continue;
+      } else {
+        perror("Send socket error");
+        return false;
+      }
+    } else if (ret == 0) {
+      fprintf(stderr, "remote Socket closed!\n");
+      return false;
+    } else {
+      remaining -= ret;
+      pos += ret;
+    }
+  }
+  return true;
+}
 
 bool handleTcpPacket(TcpSocketState& state, PackHeader* pack) {
   if (state.state == 0) {
@@ -24,29 +49,34 @@ bool handleTcpPacket(TcpSocketState& state, PackHeader* pack) {
       ReqPackHeader* req = (ReqPackHeader*)(pack + 1);
       len -= sizeof(ReqPackHeader);
       fprintf(stderr, "recv req: %d, %*s\n", req->reqId, len, (char*)(req + 1));
+      char* uri = (char*)(req + 1);
+      --len;
 
       // TODO(junhaozhang):马上生成resId,获取文件相关信息,发送回复
-      int remaining = respack_init((PackHeader*)state.outBuffer, 200, 1000, 1024 * 1024, 1000000);
-      unsigned char* pos = state.outBuffer;
-      int ret;
-      while (remaining > 0) {
-        ret = write(state.socket, pos, remaining);
-        if (ret < 0) {
-          if (errno == EAGAIN) {
-            continue;
-          } else {
-            perror("Send socket error");
+      if (!g_svStates.scheduler.exists(uri)) {
+        FileInfo fi;
+        getFileInfo((char*)(req + 1), len, fi);
+        if (fi.exists) {
+          if (!sendRespPacket(state.socket, state.outBuffer, 200, 1000, fi.fileLength, fi.lastModifiedDate)) {
             return false;
           }
-        } else if (ret == 0) {
-          fprintf(stderr, "remote Socket closed!\n");
-          return false;
+          g_svStates.scheduler.addUri(uri, fi, state);
+          state.state = 1;
+          fprintf(stderr, "Response packet sent, state turns 1!\n");
         } else {
-          remaining -= ret;
-          pos += ret;
+          sendRespPacket(state.socket, state.outBuffer, 404, 1000, fi.fileLength, fi.lastModifiedDate);
+          return false;
         }
+      } else {
+        FileInfo fi;
+        g_svStates.scheduler.getFileInfo(fi);
+        if (!sendRespPacket(state.socket, state.outBuffer, 200, 1000, fi.fileLength, fi.lastModifiedDate)) {
+          return false;
+        }
+        g_svStates.scheduler.addRequest(uri, state);
+        state.state = 1;
+        fprintf(stderr, "Response packet sent, state turns 1!\n");
       }
-      fprintf(stderr, "Response packet sent, state turns 1!\n");
       state.state = 1;
       return true;
     }
@@ -119,15 +149,6 @@ void recvTcpPacket(TcpSocketState& state) {
     memcpy(state.buffer, state.buffer + state.readPos, state.bufferPos - state.readPos);
     state.bufferPos -= state.readPos;
     state.readPos = 0;
-  }
-}
-
-void putReqsToSchedul() {
-  while (!g_svStates.reqQueue.empty()) {
-    PullRequest pq = g_svStates.reqQueue.front();
-    g_svStates.reqQueue.pop();
-
-    // g_svStates.reqScheduler.addRequest(pq);
   }
 }
 

@@ -21,7 +21,7 @@ inline int reqpack_init(PackHeader* pack, char* uri) {
   memcpy(pack->type, REQPACK_TYPE, PACKTYPE_LENGTH);
   // TODO(junhaozhang): cksum current not used.
   pack->cksum = 0;
-  len = ((unsigned char*)memcpy(header + 1, uri, len) - (unsigned char*)pack) + len;
+  len = ((unsigned char*)strcpy((char*)(header + 1), uri) - (unsigned char*)pack) + len + 1;
   if (len > 64 * 1024 - 29) {
     fprintf(stderr, "packet two long!");
     exit(1);

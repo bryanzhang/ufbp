@@ -5,6 +5,9 @@
 #include <ext/hash_map>
 #include <sys/epoll.h>
 #include "ufbp_common.hpp"
+#include "tcp_socket_state.hpp"
+#include "scheduler.hpp"
+#include "fileinfo.hpp"
 
 struct BufferUnit {
   unsigned char* pos;
@@ -17,15 +20,6 @@ struct PullRequest {
   int len;
 };
 
-struct TcpSocketState {
-  unsigned char buffer[128 * 1024];
-  unsigned char outBuffer[1024];  // TODO(junhaozhang): should use public.
-  int socket;
-  int state;
-  int bufferPos;
-  int readPos;
-};
-
 struct ServerStates {
   struct epoll_event events[20];
   int epfd;
@@ -34,11 +28,9 @@ struct ServerStates {
   int tcpSocket;
 
   __gnu_cxx::hash_map<int, TcpSocketState*> socketsPool;
+  Scheduler scheduler;
 
-  std::queue<BufferUnit> bufQueue;
-  std::queue<PullRequest> reqQueue;
-
-  inline ServerStates() : epfd(-1), socket(-1), tcpSocket(-1), bufQueue(), reqQueue() {
+  inline ServerStates() : epfd(-1), socket(-1), tcpSocket(-1) {
   }
 };
 
