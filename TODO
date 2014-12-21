@@ -1,0 +1,5 @@
+client
+超时的请求进行关闭
+bitvector
+调度器要考虑发送完，但没完全确认的transfer/uri,如果ack没超时不要被调度到,现在仅仅考虑上次发送时间。
+udp一个datagram包含数据和meta,能否用sendfile?
