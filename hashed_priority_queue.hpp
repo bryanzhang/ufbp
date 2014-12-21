@@ -1,6 +1,7 @@
 #ifndef HASHED_PRIORITY_QUEUE_HPP_
 #define HASHED_PRIORITY_QUEUE_HPP_
 
+#include <cassert>
 #include <vector>
 #include <ext/hash_map>
 

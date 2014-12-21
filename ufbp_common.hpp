@@ -9,4 +9,6 @@
 #define BUFFER_SIZE 2*1024*1024
 #define PACKTYPE_LENGTH 4
 
+#define CHUNK_SIZE 60*1024
+
 #endif // UFBP_COMMON_HPP_

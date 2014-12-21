@@ -10,7 +10,7 @@ struct TransferState {
   long lastAckTime;
   WaitAckQueue waitAckQueue;
 
-  TransferState(int s, unsigned long t) : socket(s), sendPos(0), lastSendTime(t), lastAckTime(t) {
+  TransferState(int s, long t) : socket(s), sendPos(0), lastSendTime(t), lastAckTime(t) {
   }
 };
 

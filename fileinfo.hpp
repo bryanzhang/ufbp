@@ -17,7 +17,7 @@ inline void fileinfo_init(FileInfo& fi) {
   fi.lastModifiedDate = 100;
 }
 
-inline void getFileInfo(char* uri, int len, FileInfo& fi) {
+inline void getFileInfo(char* uri, FileInfo& fi) {
   struct stat buf;
   fileinfo_init(fi);
 

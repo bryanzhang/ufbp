@@ -21,6 +21,9 @@ struct PullRequest {
 };
 
 struct ServerStates {
+  unsigned char transferBuffer[CHUNK_SIZE];
+  int transferBufferPos;
+
   struct epoll_event events[20];
   int epfd;
 
@@ -30,7 +33,7 @@ struct ServerStates {
   __gnu_cxx::hash_map<int, TcpSocketState*> socketsPool;
   Scheduler scheduler;
 
-  inline ServerStates() : epfd(-1), socket(-1), tcpSocket(-1) {
+  inline ServerStates() : transferBufferPos(0), epfd(-1), socket(-1), tcpSocket(-1) {
   }
 };
 

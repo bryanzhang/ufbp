@@ -7,15 +7,20 @@
 struct UriState {
   char* uri;
   long fileLength;
+  long chunks;
   long lastModifiedDate;
   long lastSendTime;
   long lastAckTime;
   TransferStateQueue transferStateQueue;
   BitVector sendMap;
 
-  UriState(char* u, unsigned long fl, unsigned long md, unsigned long t, int socket) : uri(u), fileLength(fl), lastModifiedDate(md), lastSendTime(t), lastAckTime(t), sendMap() {
+  UriState(char* u, long fl, long md, long t, int socket) : uri(u), fileLength(fl), chunks(fl / CHUNK_SIZE), lastModifiedDate(md), lastSendTime(t), lastAckTime(t), sendMap() {
     TransferState* state = new TransferState(socket, t);
     transferStateQueue.PushEntry(socket, state);
+  }
+
+  void add(TransferState* state) {
+    transferStateQueue.PushEntry(state->socket, state);
   }
 };
 

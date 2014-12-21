@@ -55,7 +55,7 @@ bool handleTcpPacket(TcpSocketState& state, PackHeader* pack) {
       // TODO(junhaozhang):马上生成resId,获取文件相关信息,发送回复
       if (!g_svStates.scheduler.exists(uri)) {
         FileInfo fi;
-        getFileInfo((char*)(req + 1), len, fi);
+        getFileInfo(uri, fi);
         if (fi.exists) {
           if (!sendRespPacket(state.socket, state.outBuffer, 200, 1000, fi.fileLength, fi.lastModifiedDate)) {
             return false;
@@ -69,7 +69,7 @@ bool handleTcpPacket(TcpSocketState& state, PackHeader* pack) {
         }
       } else {
         FileInfo fi;
-        g_svStates.scheduler.getFileInfo(fi);
+        g_svStates.scheduler.getFileInfo(uri, fi);
         if (!sendRespPacket(state.socket, state.outBuffer, 200, 1000, fi.fileLength, fi.lastModifiedDate)) {
           return false;
         }
@@ -152,11 +152,34 @@ void recvTcpPacket(TcpSocketState& state) {
   }
 }
 
-void cron() {
-  // removeInactiveReqs();
-  // putReqsToSchedule();
-  // putChunksToSchedule();  // chunk调度队列会设置最大长度,防止remove时操作过多(现在是线性扫描)
+void removeInactiveReqs() {
+  // TODO(junhaozhang):
+}
 
+void schedule() {
+  if (g_svStates.scheduler.uriStateQueue.IsEmpty()) {
+    return;
+  }
+
+  while (g_svStates.transferBufferPos < sizeof(g_svStates.transferBuffer)) {
+    UriState* state = g_svStates.scheduler.schedule();
+    TransferState* transfer = NULL;
+    int socket = 0;
+    state->transferStateQueue.PopLRUEntry(&socket, &transfer);
+    int pos = 0;
+
+    // 如果sendPos小于chunks,sendPos+1,发送该chunk
+    // TODO(junhaozhang):
+    if (transfer->sendPos < state->chunks) {
+      unsigned short len = ((state->fileLength - CHUNK_SIZE * transfer->sendPos) % CHUNK_SIZE);
+      BufferUnit bu = { g_svStates.transferBuffer + g_svStates.transferBufferPos, len };
+    }
+
+    ChunkState* chunk = NULL;
+  }
+}
+
+void cron() {
   // 缓冲区没满都可以发送
   // unsigned char* pos = g_svStates.outBuffer + g_svStates.outBufferPos;
   // unsigned char* endPos = g_svStates.outBuffer + sizeof(g_svStates.outBuffer);
@@ -285,7 +308,8 @@ int main() {
         return 0;
         */
       }
-      cron();
+      removeInactiveReqs();
+      schedule();
     }
   }
 
