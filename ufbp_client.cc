@@ -11,6 +11,7 @@
 #include "socket_util.hpp"
 #include "reqpack.hpp"
 #include "respack.hpp"
+#include "transpack.hpp"
 
 using namespace std;
 
@@ -21,13 +22,16 @@ void usage() {
 enum DownloadStatus {
   INIT,
   WAITFOR_RESP,
+  WAITFOR_TRANS,
 };
+int udpSocket = -1;
 int epfd = -1;
 int tcpSocket = -1;
 unsigned char tcpInputBuffer[128 * 1024];
 int tcpInputBufferPos = 0;
 int tcpInputBufferReadPos = 0;
 unsigned char tcpOutputBuffer[2048];
+unsigned char udpInputBuffer[MAX_TRANSPACK_SIZE];
 
 // states
 DownloadStatus status = INIT;
@@ -68,6 +72,10 @@ bool handleTcpPacket(PackHeader* pack) {
       ResPackHeader* res = (ResPackHeader*)(pack + 1);
       len -= sizeof(ResPackHeader);
       fprintf(stderr, "Response: code=%hd,resId=%lld,filelength=%lld,lastModifiedDate=%lld\n", res->code, res->resId, res->fileLength, res->lastModifiedDate);
+      if (res->code != 200) {
+        return false;
+      }
+      status = WAITFOR_TRANS;
       return true;
     } else {
       fprintf(stderr, "Unexpected pack type:%.*s\n", PACKTYPE_LENGTH, pack->type);
@@ -75,6 +83,65 @@ bool handleTcpPacket(PackHeader* pack) {
     }
   } else {
     return false;
+  }
+}
+
+bool handleUdpPacket(PackHeader* pack) {
+  if (status != WAITFOR_TRANS) {
+    return false;
+  }
+
+  if (memcmp(pack->type, TRANSPACK_TYPE, PACKTYPE_LENGTH)) {
+    perror("not a transpack!");
+    return false;
+  }
+
+  int len = pack->len - sizeof(*pack);
+  TransPackHeader* trans = (TransPackHeader*)(pack + 1);
+  len -= sizeof(*trans);
+  if (len < 0) {
+    perror("transpack is too short!");
+    return false;
+  }
+  long fileRemaining = (trans->fileLength - trans->chunk * CHUNK_SIZE);
+  int chunkSize = (fileRemaining <= CHUNK_SIZE ? fileRemaining : CHUNK_SIZE);
+  if (len != chunkSize) {
+    perror("chunkSize error!");
+    return false;
+  }
+
+  fprintf(stderr, "resId=%lld,fileLength=%lld,lastModifiedDate=%lld,chunk=%d\n", trans->resId, trans->fileLength, trans->lastModifiedDate, trans->chunk);
+  fprintf(stderr, "Chunk data:%.*s\n", chunkSize, (char*)(trans + 1));
+  return true;
+}
+
+bool recvUdpPacket() {
+  int ret;
+  struct sockaddr_in remoteAddr;
+  socklen_t socklen = sizeof(remoteAddr);
+  for (; ;) {
+    ret = recvfrom(udpSocket, udpInputBuffer, sizeof(udpInputBuffer), 0, (struct sockaddr*)&remoteAddr, &socklen);
+    if (ret == -1) {
+      if (errno == EAGAIN) {
+        break;
+      }
+      perror("Recvfrom error");
+      return false;
+    }
+
+    PackHeader* pack = (PackHeader*)udpInputBuffer;
+    if (pack->len != ret) {
+      perror("pack len != ret");
+      return false;
+    }
+
+    if (pack->len < sizeof(*pack)) {
+      perror("pack len too short!");
+      return false;
+    }
+
+
+    return handleUdpPacket(pack);
   }
 }
 
@@ -152,7 +219,7 @@ bool recvTcpPacket() {
 }
 
 int main(int argc, char** argv) {
-  int inet_sock, socklen, so_reuseaddr = 1;
+  int socklen, so_reuseaddr = 1;
   struct sockaddr_in addr, from;
   char data[1025 * 1024];
 
@@ -166,13 +233,13 @@ int main(int argc, char** argv) {
   char* savepath = argv[3];
 
   // establish socket.
-  if ((inet_sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+  if ((udpSocket = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
     perror("Listen UDP created socket error!");
   }
 
-  if (setsockopt(inet_sock, SOL_SOCKET, SO_REUSEADDR, &so_reuseaddr, sizeof(so_reuseaddr)) < 0) {
+  if (setsockopt(udpSocket, SOL_SOCKET, SO_REUSEADDR, &so_reuseaddr, sizeof(so_reuseaddr)) < 0) {
     perror("Listen UDP set socket error");
-    close(inet_sock);
+    close(udpSocket);
     return 1;
   }
 
@@ -180,22 +247,22 @@ int main(int argc, char** argv) {
   addr.sin_port = htons(UFBP_CLIENT_PORT);
   addr.sin_family = AF_INET;
 
-  if (bind(inet_sock, (struct sockaddr*)&addr, sizeof addr) < 0) {
+  if (bind(udpSocket, (struct sockaddr*)&addr, sizeof addr) < 0) {
     perror("Listen UDP bind server error!");
-    close(inet_sock);
+    close(udpSocket);
     return 2;
   }
-  fprintf(stderr, "UDP socket=%d\n", inet_sock);
-  setnonblocking(inet_sock);
+  fprintf(stderr, "UDP socket=%d\n", udpSocket);
+  setnonblocking(udpSocket);
 
   // create epoll and register.
   struct epoll_event ev, events[20];
   memset(events, 0, sizeof(events));
 
   epfd = epoll_create(256);
-  ev.data.fd = inet_sock;
+  ev.data.fd = udpSocket;
   ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-  epoll_ctl(epfd, EPOLL_CTL_ADD, inet_sock, &ev);
+  epoll_ctl(epfd, EPOLL_CTL_ADD, udpSocket, &ev);
 
   // establish tcp socket.
   tcpSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -240,12 +307,25 @@ int main(int argc, char** argv) {
           }
         }
         if (events[i].events & EPOLLIN) {
-          recvTcpPacket();
+          if (!recvTcpPacket()) {
+            fprintf(stderr, "Program exit!\n");
+            return 1;
+          }
+        }
+        continue;
+      }
+
+      if (events[i].data.fd == udpSocket) {
+        if (events[i].events & EPOLLIN) {
+          if (!recvUdpPacket()) {
+            fprintf(stderr, "Program exit!\n");
+            return 1;
+          }
         }
         continue;
       }
     }
   }
-  close(inet_sock);
+  close(udpSocket);
   return 0;
 }

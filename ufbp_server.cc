@@ -318,7 +318,8 @@ int main() {
       if (g_svStates.events[i].data.fd == g_svStates.socket) {
         if (g_svStates.events[i].events & EPOLLIN) {
           continue;
-        } else if (g_svStates.events[i].events & EPOLLOUT) {
+        }
+        if (g_svStates.events[i].events & EPOLLOUT) {
           transfer();
         }
         continue;
