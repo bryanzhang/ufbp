@@ -64,5 +64,9 @@ int main(int argc, char* argv[]) {
   memcpy(dm, sm, (size_t)statbuf.st_size);
   // 可以不要这行代码
   msync(dm, (size_t)statbuf.st_size, MS_SYNC);
+
+  munmap(sm, (size_t)statbuf.st_size);
+  munmap(dm, (size_t)statbuf.st_size);
+
   return EXIT_SUCCESS;
 }

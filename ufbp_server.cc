@@ -179,16 +179,6 @@ void schedule() {
   }
 }
 
-void cron() {
-  // 缓冲区没满都可以发送
-  // unsigned char* pos = g_svStates.outBuffer + g_svStates.outBufferPos;
-  // unsigned char* endPos = g_svStates.outBuffer + sizeof(g_svStates.outBuffer);
-  // while (pos < endPos) {
-    // Chunk chunk = g_svStates.chunkScheduler.schedule();
-    
-  // }
-}
-
 int main() {
   // create udp socket and bind.
   int so_broadcast = 1;
