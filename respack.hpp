@@ -6,12 +6,12 @@
 struct ResPackHeader {
   unsigned short code;
   unsigned long resId;
-  unsigned long fileLength;
-  unsigned long lastModifiedDate;
+  long fileLength;
+  long lastModifiedDate;
 };
 #pragma pack(pop)
 
-inline int respack_init(PackHeader* pack, unsigned short code, unsigned long resId, unsigned long fileLength, unsigned long lastModifiedDate) {
+inline int respack_init(PackHeader* pack, unsigned short code, unsigned long resId, long fileLength, long lastModifiedDate) {
   ResPackHeader* header = (ResPackHeader*)(pack + 1);
   header->code = code;
   header->resId = resId;

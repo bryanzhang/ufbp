@@ -3,6 +3,9 @@
 
 // TODO(junhaozhang):
 class BitVector {
+ public:
+  void clear() {}
+  void set(int pos) {}
 };
 
 #endif  // BIT_VECTOR_HPP_

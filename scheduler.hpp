@@ -30,7 +30,7 @@ struct Scheduler {
     UriState* s;
     uriStateQueue.PopEntry(uri, &s);
     long t = time(NULL);
-    s->add(new TransferState(state.socket, t));
+    s->add(new TransferState(state.socket, s->chunks, t));
     uriStateQueue.PushEntry(uri, s);
   }
 

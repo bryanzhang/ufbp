@@ -10,3 +10,7 @@ filelength
 packnum
 data (1024Bytes)
 先在单机做，如果性能与nginx差不多，再做一次整体测试。服务器端和客户端都需要保持各个连接的状态。
+
+同一个uri中不同连接的调度策略:
+对于未发送完成的,关心lastSendTime;
+对于已经发送完成的,关心lastAckTime.

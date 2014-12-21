@@ -9,11 +9,6 @@
 #include "scheduler.hpp"
 #include "fileinfo.hpp"
 
-struct BufferUnit {
-  unsigned char* pos;
-  unsigned short len;
-};
-
 struct PullRequest {
   unsigned long reqId;
   char* uri;
@@ -23,6 +18,7 @@ struct PullRequest {
 struct ServerStates {
   unsigned char transferBuffer[CHUNK_SIZE];
   int transferBufferPos;
+  int transferBufferOutPos;
 
   struct epoll_event events[20];
   int epfd;
@@ -32,8 +28,9 @@ struct ServerStates {
 
   __gnu_cxx::hash_map<int, TcpSocketState*> socketsPool;
   Scheduler scheduler;
+  std::queue<unsigned short> transferBufferQueue;
 
-  inline ServerStates() : transferBufferPos(0), epfd(-1), socket(-1), tcpSocket(-1) {
+  inline ServerStates() : transferBufferPos(0), transferBufferOutPos(0), epfd(-1), socket(-1), tcpSocket(-1) {
   }
 };
 

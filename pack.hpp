@@ -3,6 +3,7 @@
 
 #define REQPACK_TYPE "PULL"
 #define RESPACK_TYPE "RESP"
+#define TRANSPACK_TYPE "TRAN"
 
 #pragma pack(push)
 #pragma pack(1)

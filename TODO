@@ -1,3 +1,10 @@
+同一个uri中不同连接的调度策略:
+对于未发送完成的,关心lastSendTime;
+对于已经发送完成的,关心lastAckTime.
+
+其实没必要有uri调度的那一层，只需要一个uri对应socket的队列
+
+发送
 client
 超时的请求进行关闭
 bitvector

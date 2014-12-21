@@ -12,6 +12,7 @@
 #include "reqpack.hpp"
 #include "respack.hpp"
 #include "fileinfo.hpp"
+#include "transpack.hpp"
 
 bool sendRespPacket(int socket, unsigned char* buffer, unsigned short code, unsigned long resId, unsigned long fileLength, unsigned long lastModifiedDate) {
   int remaining = respack_init((PackHeader*)buffer, code, resId, fileLength, lastModifiedDate);
@@ -156,26 +157,51 @@ void removeInactiveReqs() {
   // TODO(junhaozhang):
 }
 
+void transfer() {
+  // while (g_svStates.
+}
+
 void schedule() {
   if (g_svStates.scheduler.uriStateQueue.IsEmpty()) {
     return;
   }
 
-  while (g_svStates.transferBufferPos < sizeof(g_svStates.transferBuffer)) {
+  while (g_svStates.transferBufferPos < sizeof(g_svStates.transferBuffer) - MAX_TRANSPACK_SIZE) {
     UriState* state = g_svStates.scheduler.schedule();
     TransferState* transfer = NULL;
     int socket = 0;
     state->transferStateQueue.PopLRUEntry(&socket, &transfer);
-    int pos = 0;
 
     // 如果sendPos小于chunks,sendPos+1,发送该chunk
-    // TODO(junhaozhang):
+    int chunk;
+    long sendTime = time(NULL);
+    ChunkState chunkState;
     if (transfer->sendPos < state->chunks) {
-      unsigned short len = ((state->fileLength - CHUNK_SIZE * transfer->sendPos) % CHUNK_SIZE);
-      BufferUnit bu = { g_svStates.transferBuffer + g_svStates.transferBufferPos, len };
+      chunk = transfer->sendPos;
+      ++transfer->sendPos;
+      chunkState.lastSendTime = sendTime;
+      chunkState.pos = transfer->sendPos;
+    } else {
+      transfer->waitAckQueue.PopLRUEntry(&chunk, &chunkState);
+      chunkState.lastSendTime = sendTime;
     }
 
-    ChunkState* chunk = NULL;
+    // TODO(junhaozhang): 同一个uri下所有的transfer全部更新
+    transfer->waitAckQueue.PushEntry(chunk, chunkState);
+    transfer->lastSendTime = sendTime;
+    state->sendMap.set(chunk);
+    state->lastSendTime = sendTime;
+    g_svStates.scheduler.uriStateQueue.PushEntry(state->uri, state);
+
+    long pos = CHUNK_SIZE * chunk;
+    long remaining = (state->fileLength - pos);
+    unsigned short len = (remaining >= CHUNK_SIZE ? CHUNK_SIZE : remaining);
+
+    transpack_init((PackHeader*)(g_svStates.transferBuffer + g_svStates.transferBufferPos), 100, state->fileLength, state->lastModifiedDate, chunk, (char*)state->mmap_addr + pos, len);
+
+    g_svStates.transferBufferPos += len;
+
+    g_svStates.transferBufferQueue.push(len);
   }
 }
 

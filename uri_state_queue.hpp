@@ -34,12 +34,13 @@ struct UriState {
       exit(1);
     }
 
-    TransferState* state = new TransferState(socket, t);
+    TransferState* state = new TransferState(socket, (fl + CHUNK_SIZE - 1) / CHUNK_SIZE, t);
     transferStateQueue.PushEntry(socket, state);
   }
 
   void add(TransferState* state) {
     transferStateQueue.PushEntry(state->socket, state);
+    sendMap.clear();
   }
 
   ~UriState() {
