@@ -4,6 +4,8 @@
 #include <queue>
 #include <ext/hash_map>
 #include <sys/epoll.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 #include "ufbp_common.hpp"
 #include "tcp_socket_state.hpp"
 #include "scheduler.hpp"
@@ -26,11 +28,16 @@ struct ServerStates {
   int socket;
   int tcpSocket;
 
+  struct sockaddr_in si_client;
+
   __gnu_cxx::hash_map<int, TcpSocketState*> socketsPool;
   Scheduler scheduler;
   std::queue<unsigned short> transferBufferQueue;
 
   inline ServerStates() : transferBufferPos(0), transferBufferOutPos(0), epfd(-1), socket(-1), tcpSocket(-1) {
+    si_client.sin_family = AF_INET;
+    si_client.sin_port = htons(UFBP_CLIENT_PORT);
+    si_client.sin_addr.s_addr = htonl(-1);
   }
 };
 

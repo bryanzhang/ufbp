@@ -158,7 +158,25 @@ void removeInactiveReqs() {
 }
 
 void transfer() {
-  // while (g_svStates.
+  while (!g_svStates.transferBufferQueue.empty()) {
+    unsigned short len = g_svStates.transferBufferQueue.front();
+    if (sendto(g_svStates.socket, g_svStates.transferBuffer + g_svStates.transferBufferOutPos, len, 0, (struct sockaddr*)&g_svStates.si_client, sizeof(g_svStates.si_client)) == -1) {
+      if (errno == EAGAIN) {
+        break;
+      } else {
+        perror("Broadcast send error!");
+        exit(1);
+      }
+    }
+    g_svStates.transferBufferQueue.pop();
+    g_svStates.transferBufferOutPos += len;
+  }
+
+  if (g_svStates.transferBufferOutPos >= sizeof(g_svStates.transferBuffer) / 2) {
+    memcpy(g_svStates.transferBuffer, g_svStates.transferBuffer + g_svStates.transferBufferOutPos, g_svStates.transferBufferPos - g_svStates.transferBufferOutPos);
+    g_svStates.transferBufferPos -= g_svStates.transferBufferOutPos;
+    g_svStates.transferBufferOutPos = 0;
+  }
 }
 
 void schedule() {
@@ -208,7 +226,7 @@ void schedule() {
 int main() {
   // create udp socket and bind.
   int so_broadcast = 1;
-  struct sockaddr_in si_server, si_client;
+  struct sockaddr_in si_server;
   if ((g_svStates.socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
     perror("Broadcast UDP created socket error");
     return 1;
@@ -255,9 +273,6 @@ int main() {
     return 1;
   }
 
-  si_client.sin_family = AF_INET;
-  si_client.sin_port = htons(UFBP_CLIENT_PORT);
-  si_client.sin_addr.s_addr = htonl(-1);
 
   // create epoll and register.
   g_svStates.epfd = epoll_create(256);
@@ -301,6 +316,11 @@ int main() {
       }
 
       if (g_svStates.events[i].data.fd == g_svStates.socket) {
+        if (g_svStates.events[i].events & EPOLLIN) {
+          continue;
+        } else if (g_svStates.events[i].events & EPOLLOUT) {
+          transfer();
+        }
         continue;
       }
 
@@ -313,16 +333,6 @@ int main() {
       if (g_svStates.events[i].events & EPOLLIN) {
         recvTcpPacket(*g_svStates.socketsPool[g_svStates.events[i].data.fd]);
       } else if (g_svStates.events[i].events & EPOLLOUT) {
-        /*
-        if (sendto(g_svStates.socket, BROAD_CONTENT, strlen(BROAD_CONTENT), 0, (struct sockaddr*)&si_client, sizeof(si_client)) < 0) {
-          perror("Broadcast send error!");
-          close(g_svStates.socket);
-          return 1;
-        }
-        printf("Send successfully!\n");
-        close(g_svStates.socket);
-        return 0;
-        */
       }
       removeInactiveReqs();
       schedule();
