@@ -1,6 +1,10 @@
 #ifndef TRANSPACK_HPP_
 #define TRANSPACK_HPP_
 
+#include <cstring>
+#include "pack.hpp"
+#include "ufbp_common.hpp"
+
 #pragma pack(push)
 #pragma pack(1)
 struct TransPackHeader {
@@ -19,7 +23,6 @@ inline int transpack_init(PackHeader* pack, unsigned long resId, long fileLength
   header->chunk = chunk;
   memcpy(pack->type, TRANSPACK_TYPE, PACKTYPE_LENGTH);
   memcpy(header + 1, mmap_addr, len);
-  pack->cksum = 0;
   pack->len = sizeof(*header) + sizeof(*pack) + len;
   return pack->len;
 }

@@ -4,12 +4,12 @@
 #define REQPACK_TYPE "PULL"
 #define RESPACK_TYPE "RESP"
 #define TRANSPACK_TYPE "TRAN"
+#define ACKPACK_TYPE "ACKN"
 
 #pragma pack(push)
 #pragma pack(1)
 struct PackHeader {
   unsigned short len;
-  unsigned short cksum;
   char type[4];
 };
 #pragma pack(pop)

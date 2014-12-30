@@ -1,12 +1,2 @@
-同一个uri中不同连接的调度策略:
-对于未发送完成的,关心lastSendTime;
-对于已经发送完成的,关心lastAckTime.
-
-其实没必要有uri调度的那一层，只需要一个uri对应socket的队列
-
-发送
-client
-超时的请求进行关闭
-bitvector
-调度器要考虑发送完，但没完全确认的transfer/uri,如果ack没超时不要被调度到,现在仅仅考虑上次发送时间。
-udp一个datagram包含数据和meta,能否用sendfile?
+1.keepalive机制
+2.uriStates按最后发送时间排成队列,一旦调度器无法调度要发送的包,从recentSendChunks中选择包进行发送,充分利用带宽
