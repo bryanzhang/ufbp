@@ -1,2 +1,8 @@
-1.keepalive机制
+1.tcmalloc
 2.uriStates按最后发送时间排成队列,一旦调度器无法调度要发送的包,从recentSendChunks中选择包进行发送,充分利用带宽
+3.大小为0的文件特殊处理
+4.gflag/glog
+5.daemon以及对ctrl + c的信号处理
+6.断点续传机制
+7.keepalive机制
+8.client端多个请求并发

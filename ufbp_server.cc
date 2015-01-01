@@ -130,7 +130,9 @@ bool handleReqPacket(TransferState& state, ReqPackHeader* req, int len) {
     state.chunks = chunks;
     state.pending = false;
     state.uri = uri;
-    state.acked = new unsigned int[(chunks + 31) >> 5];
+    int arrSize = ((chunks + 31) >> 5);
+    state.acked = new unsigned int[arrSize];
+    memset(state.acked, 0, sizeof(*state.acked) * arrSize);
   }
 
   return sendRespPacket(state.socket, g_svStates.tcpOutBuffer, code, resId, fileLength, lastModifiedDate) && code == 200;
@@ -280,6 +282,7 @@ bool recvTcpData(TransferState& state) {
       return false;
     } else {
       pos += ret;
+      state.tcpInBufferReadPos += ret;
       remaining -= ret;
     }
   }
@@ -391,6 +394,7 @@ int main() {
   int nfds = 0;
   for (; ;) {
     nfds = epoll_wait(g_svStates.epfd, g_svStates.events, 20, 50);
+    updateTime();
     for (int i = 0; i < nfds; ++i) {
       if (g_svStates.events[i].data.fd == g_svStates.tcpSocket) {
         acceptConn();
@@ -399,7 +403,9 @@ int main() {
 
       if (g_svStates.events[i].data.fd == g_svStates.broadcastSocket) {
         if (g_svStates.events[i].events & EPOLLOUT) {
-          transfer();
+          if (!transfer()) {
+            return 1;
+          }
         }
         continue;
       }
@@ -410,12 +416,8 @@ int main() {
       }
     }
 
-    updateTime();
     removeInactives();
     schedule();
-    if (!transfer()) {
-      break;
-    }
   }
 
   return 0;

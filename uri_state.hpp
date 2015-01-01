@@ -12,7 +12,7 @@ struct UriState {
   std::string uri;
   long lastModifiedDate;
   long fileLength;
-  long resId;
+  unsigned long resId;
   int chunks;
   int fd;
   void* mmap_addr;

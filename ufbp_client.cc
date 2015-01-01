@@ -1,17 +1,24 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <string>
 
 #include "ufbp_common.hpp"
 #include "socket_util.hpp"
 #include "reqpack.hpp"
 #include "respack.hpp"
 #include "transpack.hpp"
+#include "ackpack.hpp"
+#include "client_states.hpp"
 
 using namespace std;
 
@@ -19,30 +26,12 @@ void usage() {
   printf("Usage: ufbp_client ${host} ${uri} ${output_path}\n");
 }
 
-enum DownloadStatus {
-  INIT,
-  WAITFOR_RESP,
-  WAITFOR_TRANS,
-};
-int udpSocket = -1;
-int epfd = -1;
-int tcpSocket = -1;
-unsigned char tcpInputBuffer[128 * 1024];
-int tcpInputBufferPos = 0;
-int tcpInputBufferReadPos = 0;
-unsigned char tcpOutputBuffer[2048];
-unsigned char udpInputBuffer[MAX_TRANSPACK_SIZE];
-
-// states
-DownloadStatus status = INIT;
-unsigned char* buffer = new unsigned char[BUFFER_SIZE];
-
-bool sendRequestPacket(int socket, char* uri) {
+bool sendRequestPacket() {
   int ret;
-  unsigned char* pos = buffer;
-  int remaining = reqpack_init((PackHeader*)buffer, uri);
+  unsigned char* pos = g_cliStates.tempBuffer;
+  int remaining = reqpack_init((PackHeader*)pos, (char*)g_cliStates.uri.c_str());
   while (remaining > 0) {
-    ret = write(socket, pos, remaining);
+    ret = write(g_cliStates.tcpSocket, pos, remaining);
     if (ret < 0) {
       if (errno == EAGAIN) {
         continue;
@@ -56,71 +45,88 @@ bool sendRequestPacket(int socket, char* uri) {
     pos += ret;
     remaining -= ret;
   }
+  g_cliStates.state = WAITFOR_RESP;
   return true;
 }
 
-bool handleTcpPacket(PackHeader* pack) {
-  if (status == WAITFOR_RESP) {
-    fprintf(stderr, "Pack len:%d\n", (int)pack->len);
-    int len = pack->len - sizeof(PackHeader);
-    if (!memcmp(pack->type, RESPACK_TYPE, PACKTYPE_LENGTH)) {
-      if (len < sizeof(ResPackHeader)) {
-        fprintf(stderr, "WARNING: res pack len %d < %d\n", len, sizeof(ResPackHeader));
-        return false;
+bool handleResp() {
+  // 需要能一次性接收完resp包,否则返回false
+  unsigned char* pos = g_cliStates.tempBuffer;
+  int remaining = sizeof(g_cliStates.tempBuffer);
+  int ret;
+  while (remaining > 0) {
+    ret = read(g_cliStates.tcpSocket, pos, remaining);
+    if (ret < 0) {
+      if (errno == EAGAIN) {
+        break;
       }
-   
-      ResPackHeader* res = (ResPackHeader*)(pack + 1);
-      len -= sizeof(ResPackHeader);
-      fprintf(stderr, "Response: code=%hd,resId=%lld,filelength=%lld,lastModifiedDate=%lld\n", res->code, res->resId, res->fileLength, res->lastModifiedDate);
-      if (res->code != 200) {
-        return false;
-      }
-      status = WAITFOR_TRANS;
-      return true;
-    } else {
-      fprintf(stderr, "Unexpected pack type:%.*s\n", PACKTYPE_LENGTH, pack->type);
+      perror("Read socket error");
       return false;
+    } else if (ret == 0) {
+      fprintf(stderr, "Remote socket closed!\n");
+      pos += ret;
+      remaining -= ret;
+    } else {
+      pos += ret;
+      remaining -= ret;
     }
-  } else {
-    return false;
   }
-}
 
-bool handleUdpPacket(PackHeader* pack) {
-  if (status != WAITFOR_TRANS) {
+  PackHeader* pack = (PackHeader*)g_cliStates.tempBuffer;
+  if (pos - g_cliStates.tempBuffer < sizeof(*pack)) {
+    fprintf(stderr, "recved bytes %d < header len\n", pos - g_cliStates.tempBuffer);
     return false;
   }
 
-  if (memcmp(pack->type, TRANSPACK_TYPE, PACKTYPE_LENGTH)) {
-    perror("not a transpack!");
-    return false;
+  if (pack->len < sizeof(*pack)) {
+    fprintf(stderr, "Packet error!len %hd < PackHeader(%d)\n", pack->len, sizeof(*pack));
+    return false; 
   }
 
   int len = pack->len - sizeof(*pack);
-  TransPackHeader* trans = (TransPackHeader*)(pack + 1);
-  len -= sizeof(*trans);
-  if (len < 0) {
-    perror("transpack is too short!");
-    return false;
-  }
-  long fileRemaining = (trans->fileLength - trans->chunk * CHUNK_SIZE);
-  int chunkSize = (fileRemaining <= CHUNK_SIZE ? fileRemaining : CHUNK_SIZE);
-  if (len != chunkSize) {
-    perror("chunkSize error!");
+  if (memcmp(pack->type, RESPACK_TYPE, PACKTYPE_LENGTH)) {
     return false;
   }
 
-  fprintf(stderr, "resId=%lld,fileLength=%lld,lastModifiedDate=%lld,chunk=%d\n", trans->resId, trans->fileLength, trans->lastModifiedDate, trans->chunk);
-  fprintf(stderr, "Chunk data:%.*s\n", chunkSize, (char*)(trans + 1));
+  if (len < sizeof(ResPackHeader)) {
+    fprintf(stderr, "WARNING: res pack len %d < %d\n", len, sizeof(ResPackHeader));
+    return false;
+  }
+
+  ResPackHeader* res = (ResPackHeader*)(pack + 1);
+  len -= sizeof(ResPackHeader);
+  if (res->code != 200) {
+    return false;
+  }
+  g_cliStates.state = TRANSFER;
+  g_cliStates.resId = res->resId;
+  g_cliStates.fileLength = res->fileLength;
+  g_cliStates.lastModifiedDate = res->lastModifiedDate;
+  g_cliStates.chunks = (res->fileLength + CHUNK_SIZE - 1) / CHUNK_SIZE;
+  if (g_cliStates.fd = open((char*)(g_cliStates.path + ".tmp").c_str(), O_RDWR | O_TRUNC, 0600) == -1) {
+    perror("open file error");
+    return false;
+  }
+  ftruncate(g_cliStates.fd, res->fileLength);
+  g_cliStates.mmap_addr = mmap(0, g_cliStates.fileLength, PROT_WRITE, MAP_PRIVATE | MAP_NORESERVE, g_cliStates.fd, 0);
+  if (g_cliStates.mmap_addr == MAP_FAILED) {
+    perror("mmap error");
+    return false;
+  }
+  int arrSize = ((g_cliStates.chunks + 31) >> 5);
+  g_cliStates.recvMap = new unsigned int[arrSize];
+  memset(g_cliStates.recvMap, 0, arrSize * sizeof(*g_cliStates.recvMap));
+  g_cliStates.lastAckTime = g_cliStates.now;
+
   return true;
 }
 
-bool recvUdpPacket() {
+bool handleData() {
   int ret;
   struct sockaddr_in remoteAddr;
   socklen_t socklen = sizeof(remoteAddr);
   for (; ;) {
-    ret = recvfrom(udpSocket, udpInputBuffer, sizeof(udpInputBuffer), 0, (struct sockaddr*)&remoteAddr, &socklen);
+    ret = recvfrom(g_cliStates.udpSocket, g_cliStates.transferBuffer, sizeof(g_cliStates.transferBuffer), 0, (struct sockaddr*)&remoteAddr, &socklen);
     if (ret == -1) {
       if (errno == EAGAIN) {
         break;
@@ -129,93 +135,114 @@ bool recvUdpPacket() {
       return false;
     }
 
-    PackHeader* pack = (PackHeader*)udpInputBuffer;
+    PackHeader* pack = (PackHeader*)g_cliStates.transferBuffer;
+    if (ret < sizeof(*pack)) {
+      fprintf(stderr, "pack len illegal,%d\n", ret);
+      return false;
+    }
     if (pack->len != ret) {
-      perror("pack len != ret");
+      fprintf(stderr, "pack len != ret\n");
       return false;
     }
 
-    if (pack->len < sizeof(*pack)) {
-      perror("pack len too short!");
+    if (memcmp(pack->type, TRANSPACK_TYPE, PACKTYPE_LENGTH)) {
+      fprintf(stderr, "not a transpack!\n");
       return false;
     }
 
-
-    return handleUdpPacket(pack);
-  }
-}
-
-bool recvTcpPacket() {
-  unsigned char* pos = tcpInputBuffer + tcpInputBufferPos;
-  int remaining = sizeof(tcpInputBuffer) - tcpInputBufferPos;
-  int ret;
-  while (remaining > 0) {
-    ret = read(tcpSocket, pos, remaining);
-    if (ret < 0) {
-      if (errno == EAGAIN) {
-        break;
-      }
-      perror("Read socket error");
-      struct epoll_event ev;
-      ev.data.fd = tcpSocket;
-      ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-      epoll_ctl(epfd, EPOLL_CTL_DEL, tcpSocket, &ev);
-      close(tcpSocket);
+    int len = pack->len - sizeof(*pack);
+    TransPackHeader* trans = (TransPackHeader*)(pack + 1);
+    len -= sizeof(*trans);
+    if (len < 0) {
+      fprintf(stderr, "transpack is too short!\n");
       return false;
-    } else if (ret == 0) {
-      fprintf(stderr, "Remote socket closed!\n");
-      struct epoll_event ev;
-      ev.data.fd = tcpSocket;
-      ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-      epoll_ctl(epfd, EPOLL_CTL_DEL, tcpSocket, &ev);
-      close(tcpSocket);
-      return false;
-    } else {
-      fprintf(stderr, "Recv %d bytes.\n", ret);
-      pos += ret;
-      remaining -= ret;
     }
-  }
-  tcpInputBufferPos = pos - tcpInputBuffer;
-
-  for (; ;) {
-    if (tcpInputBufferPos - tcpInputBufferReadPos < sizeof(PackHeader)) {
-      break;
-    }
-
-    PackHeader* header = (PackHeader*)(tcpInputBuffer + tcpInputBufferReadPos);
-    if (tcpInputBufferPos - tcpInputBufferReadPos < header->len) {
-      break;
-    }
-
-    if (header->len < sizeof(PackHeader)) {
-      fprintf(stderr, "Packet error!len %hd < PackHeader(%d)\n", header->len, sizeof(PackHeader));
-      struct epoll_event ev;
-      ev.data.fd = tcpSocket;
-      ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-      epoll_ctl(epfd, EPOLL_CTL_DEL, tcpSocket, &ev);
-      close(tcpSocket);
+    long pos = trans->chunk * CHUNK_SIZE;
+    long fileRemaining = (trans->fileLength - pos);
+    int chunkSize = (fileRemaining <= CHUNK_SIZE ? fileRemaining : CHUNK_SIZE);
+    if (len != chunkSize) {
+      fprintf(stderr, "chunkSize error!\n");
       return false;
     }
 
-    if (!handleTcpPacket(header)) {
-      fprintf(stderr, "Packet error!\n");
-      struct epoll_event ev;
-      ev.data.fd = tcpSocket;
-      ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-      epoll_ctl(epfd, EPOLL_CTL_DEL, tcpSocket, &ev);
-      close(tcpSocket);
-      return false;
+    if (g_cliStates.resId != trans->resId || g_cliStates.fileLength != trans->fileLength || g_cliStates.lastModifiedDate != trans->lastModifiedDate) {
+      continue;
     }
 
-    tcpInputBufferReadPos += header->len;
-  }
-  if (tcpInputBufferReadPos >= sizeof(tcpInputBuffer) / 2) {
-    memcpy(tcpInputBuffer, tcpInputBuffer + tcpInputBufferReadPos, tcpInputBufferPos - tcpInputBufferReadPos);
-    tcpInputBufferPos -= tcpInputBufferReadPos;
-    tcpInputBufferReadPos = 0;
+    if (trans->chunk < 0 || trans->chunk >= g_cliStates.chunks || g_cliStates.hasRecved(trans->chunk)) {
+      continue;
+    }
+
+    memcpy((char*)g_cliStates.mmap_addr + pos, trans + 1, chunkSize);
+    g_cliStates.waitForAckChunks.push(trans->chunk);
+    g_cliStates.setRecved(trans->chunk);
+    ++g_cliStates.recvCount;
+    if (g_cliStates.recvCount == g_cliStates.chunks) {
+      g_cliStates.state = TRANSFER_FINISHED;
+      return true;
+    }
   }
   return true;
+}
+
+// 返回剩余的字节数,-1表示出错
+int sendAcks() {
+  unsigned char* pos = g_cliStates.tcpOutBuffer + g_cliStates.tcpOutBufferWritePos;
+  int remaining = g_cliStates.tcpOutBufferWritePos - g_cliStates.tcpOutBufferReadPos;
+  int ret;
+  while (remaining > 0) {
+    ret = write(g_cliStates.tcpSocket, pos, remaining);
+    if (ret == -1) {
+      if (errno == EAGAIN) {
+        return remaining;
+      }
+      return -1;
+    } else if (ret == 0) {
+      return -1;
+    } else {
+      pos += ret;
+      remaining -= ret;
+      g_cliStates.tcpOutBufferReadPos += ret;
+      g_cliStates.lastAckTime = g_cliStates.now;
+    }
+  }
+  g_cliStates.tcpOutBufferReadPos = g_cliStates.tcpOutBufferWritePos = 0;
+  return 0;
+}
+
+bool packAndSendAcks(bool force) {
+  // 先发送缓冲区中剩余字节,发不完直接返回
+  int ret = sendAcks();
+  if (ret == -1) {
+    return false;
+  } else if (ret > 0) {
+    return true;
+  }
+
+  // 打包acks
+  if (g_cliStates.waitForAckChunks.empty() || (!force && g_cliStates.lastAckTime + 500 > g_cliStates.now)) {
+    return true;
+  }
+
+  unsigned short count = std::min((size_t)15 * 1024, g_cliStates.waitForAckChunks.size());
+  unsigned int* p = ackpack_init((PackHeader*)g_cliStates.tcpOutBuffer, count);
+  while (count) {
+    *p = g_cliStates.waitForAckChunks.front();
+    g_cliStates.waitForAckChunks.pop();
+    ++p;
+  }
+  g_cliStates.tcpOutBufferWritePos = (unsigned char*)p - g_cliStates.tcpOutBuffer;
+
+  // 再次尝试发送
+  return (sendAcks() != -1);
+}
+
+void updateTime() {
+  // TODO(junhaozhang): 墙面时间可能被修改,应该取milliseconds since startup.
+  struct timeval localTime;
+  gettimeofday(&localTime, NULL);
+
+  g_cliStates.now = localTime.tv_sec * 1000 + (localTime.tv_usec / 1000);
 }
 
 int main(int argc, char** argv) {
@@ -231,101 +258,58 @@ int main(int argc, char** argv) {
   char* host = argv[1];
   char* uri = argv[2];
   char* savepath = argv[3];
+  g_cliStates.uri = uri;
 
-  // establish socket.
-  if ((udpSocket = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-    perror("Listen UDP created socket error!");
-  }
-
-  if (setsockopt(udpSocket, SOL_SOCKET, SO_REUSEADDR, &so_reuseaddr, sizeof(so_reuseaddr)) < 0) {
-    perror("Listen UDP set socket error");
-    close(udpSocket);
+  if (!g_cliStates.init(host)) {
     return 1;
   }
-
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons(UFBP_CLIENT_PORT);
-  addr.sin_family = AF_INET;
-
-  if (bind(udpSocket, (struct sockaddr*)&addr, sizeof addr) < 0) {
-    perror("Listen UDP bind server error!");
-    close(udpSocket);
-    return 2;
-  }
-  fprintf(stderr, "UDP socket=%d\n", udpSocket);
-  setnonblocking(udpSocket);
-
-  // create epoll and register.
-  struct epoll_event ev, events[20];
-  memset(events, 0, sizeof(events));
-
-  epfd = epoll_create(256);
-  ev.data.fd = udpSocket;
-  ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-  epoll_ctl(epfd, EPOLL_CTL_ADD, udpSocket, &ev);
-
-  // establish tcp socket.
-  tcpSocket = socket(AF_INET, SOCK_STREAM, 0);
-  if (tcpSocket == -1) {
-    perror("TCP client socket created error");
-    return 1;
-  }
-
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(UFBP_SERVER_TCP_PORT);
-  addr.sin_addr.s_addr = inet_addr(host);
-
-  if (connect(tcpSocket, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
-    perror("Connect error");
-    close(tcpSocket);
-    return 1;
-  }
-  fprintf(stderr, "TCP socket connected!socket=%d\n", tcpSocket);
-  setnonblocking(tcpSocket);
-  ev.data.fd = tcpSocket;
-  ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-  epoll_ctl(epfd, EPOLL_CTL_ADD, tcpSocket, &ev);
 
   int nfds;
   int len;
 
   for (; ;) {
-    nfds = epoll_wait(epfd, events, 20, 500);
-    if (nfds > 0) {
-      fprintf(stderr, "NFDS:%d\n", nfds);
-    }
+    nfds = epoll_wait(g_cliStates.epfd, g_cliStates.events, 20, 10);
+    updateTime();
     for (int i = 0; i < nfds; ++i) {
-      if (events[i].data.fd == tcpSocket) {
-        if (events[i].events & EPOLLOUT) {
-          if (status == INIT) {
-            if (!sendRequestPacket(tcpSocket, uri)) {
-              perror("Send request packet failed");
+      if (g_cliStates.events[i].data.fd == g_cliStates.tcpSocket) {
+        if (g_cliStates.events[i].events & EPOLLOUT) {
+          if (g_cliStates.state == INIT) {
+            if (!sendRequestPacket()) {
               return 1;
             }
-            fprintf(stderr, "Request send out, waiting for response!\n");
-            status = WAITFOR_RESP;
+          } else if (g_cliStates.state == TRANSFER) {
+            if (!packAndSendAcks(false)) {
+              return 1;
+            }
+          } else if (g_cliStates.state == TRANSFER_FINISHED) {
+            if (!packAndSendAcks(true)) {
+              fprintf(stderr, "WARNING: transfer finished,but the last ack pack not send!\n");
+              g_cliStates.transferFinish();
+              return 0;
+            }
+            if (g_cliStates.waitForAckChunks.empty() && g_cliStates.tcpOutBufferReadPos == g_cliStates.tcpOutBufferWritePos) {
+              g_cliStates.transferFinish();
+              return 0;
+            }
           }
         }
-        if (events[i].events & EPOLLIN) {
-          if (!recvTcpPacket()) {
-            fprintf(stderr, "Program exit!\n");
-            return 1;
+        if (g_cliStates.events[i].events & EPOLLIN) {
+          if (g_cliStates.state == WAITFOR_RESP) {
+            if (!handleResp()) {
+              return 1;
+            }
           }
         }
-        continue;
-      }
-
-      if (events[i].data.fd == udpSocket) {
-        if (events[i].events & EPOLLIN) {
-          if (!recvUdpPacket()) {
-            fprintf(stderr, "Program exit!\n");
-            return 1;
+      } else if (g_cliStates.events[i].data.fd == g_cliStates.udpSocket) {
+        if (g_cliStates.events[i].events & EPOLLIN) {
+          if (g_cliStates.state == TRANSFER) {
+            if (!handleData()) {
+              return false;
+            }
           }
         }
-        continue;
       }
     }
   }
-  close(udpSocket);
-  return 0;
+  return 0;  // never reach here.
 }

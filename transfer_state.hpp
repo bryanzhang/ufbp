@@ -33,7 +33,7 @@ struct TransferState {
     delete acked;
   }
 
-  // TODO(junhaozhang): 使用双缓存减少一次memcpy
+  // TODO(junhaozhang): 使用双缓存(ring buffer)减少一次memcpy
   void moveBufferPosIfNeeded() {
     if (tcpInBufferReadPos >= (sizeof(tcpInBuffer) >> 1)) {
       memcpy(tcpInBuffer, tcpInBuffer + tcpInBufferReadPos, tcpInBufferWritePos - tcpInBufferReadPos);
