@@ -4,7 +4,7 @@ rm -rf ufbp_client
 g++ ufbp_client.cc socket_util.cc client_states.cc -o ufbp_client
 if [ -x ufbp_client ]; then
   echo "Comile successfully!"
-  ./ufbp_client 0.0.0.0 sample_file sample_file
+  ./ufbp_client 0.0.0.0 sample_file out_sample_file
 else
   echo "Comile failed!"
   exit 1

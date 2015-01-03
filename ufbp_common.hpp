@@ -6,10 +6,11 @@
 
 #define UFBP_SERVER_TCP_PORT 17752
 
-#define BUFFER_SIZE 2*1024*1024
+#define BUFFER_SIZE (2*1024*1024)
 #define PACKTYPE_LENGTH 4
 
-#define CHUNK_SIZE 60*1024
-#define MAX_TRANSPACK_SIZE 64*1024
+#define CHUNK_SIZE (60*1024)
+#define MAX_TRANSPACK_SIZE (64*1024)
+#define debug fprintf
 
 #endif // UFBP_COMMON_HPP_

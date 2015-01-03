@@ -46,6 +46,7 @@ bool sendRequestPacket() {
     remaining -= ret;
   }
   g_cliStates.state = WAITFOR_RESP;
+  fprintf(stderr, "Request sent!\n");
   return true;
 }
 
@@ -64,8 +65,7 @@ bool handleResp() {
       return false;
     } else if (ret == 0) {
       fprintf(stderr, "Remote socket closed!\n");
-      pos += ret;
-      remaining -= ret;
+      return false;
     } else {
       pos += ret;
       remaining -= ret;
@@ -103,12 +103,12 @@ bool handleResp() {
   g_cliStates.fileLength = res->fileLength;
   g_cliStates.lastModifiedDate = res->lastModifiedDate;
   g_cliStates.chunks = (res->fileLength + CHUNK_SIZE - 1) / CHUNK_SIZE;
-  if (g_cliStates.fd = open((char*)(g_cliStates.path + ".tmp").c_str(), O_RDWR | O_TRUNC, 0600) == -1) {
+  if ((g_cliStates.fd = open((char*)(g_cliStates.path + ".tmp").c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600)) == -1) {
     perror("open file error");
     return false;
   }
   ftruncate(g_cliStates.fd, res->fileLength);
-  g_cliStates.mmap_addr = mmap(0, g_cliStates.fileLength, PROT_WRITE, MAP_PRIVATE | MAP_NORESERVE, g_cliStates.fd, 0);
+  g_cliStates.mmap_addr = mmap(0, g_cliStates.fileLength, PROT_WRITE, MAP_SHARED, g_cliStates.fd, 0);
   if (g_cliStates.mmap_addr == MAP_FAILED) {
     perror("mmap error");
     return false;
@@ -134,6 +134,10 @@ bool handleData() {
       perror("Recvfrom error");
       return false;
     }
+    if (ret == 0) {
+      fprintf(stderr, "Remote udp socket closed!\n");
+      return false;
+    }
 
     PackHeader* pack = (PackHeader*)g_cliStates.transferBuffer;
     if (ret < sizeof(*pack)) {
@@ -141,7 +145,7 @@ bool handleData() {
       return false;
     }
     if (pack->len != ret) {
-      fprintf(stderr, "pack len != ret\n");
+      fprintf(stderr, "pack len != ret,%d,%d\n", (int)pack->len, ret);
       return false;
     }
 
@@ -165,23 +169,33 @@ bool handleData() {
       return false;
     }
 
+    debug(stderr, "resId: %lld, %lld\n", g_cliStates.resId, trans->resId);
+    debug(stderr, "fileLength: %lld, %lld\n", g_cliStates.fileLength, trans->fileLength);
+    debug(stderr, "lastModified: %lld, %lld\n", g_cliStates.lastModifiedDate, trans->lastModifiedDate);
     if (g_cliStates.resId != trans->resId || g_cliStates.fileLength != trans->fileLength || g_cliStates.lastModifiedDate != trans->lastModifiedDate) {
+      debug(stderr, "not related!\n");
       continue;
     }
 
     if (trans->chunk < 0 || trans->chunk >= g_cliStates.chunks || g_cliStates.hasRecved(trans->chunk)) {
+      debug(stderr, "illegal chunk or has recved!\n");
       continue;
     }
 
+    debug(stderr, "trans recved: %d\n", trans->chunk);
+    debug(stderr, "cpy\n");
     memcpy((char*)g_cliStates.mmap_addr + pos, trans + 1, chunkSize);
     g_cliStates.waitForAckChunks.push(trans->chunk);
     g_cliStates.setRecved(trans->chunk);
+    debug(stderr, "setrecved!\n");
     ++g_cliStates.recvCount;
     if (g_cliStates.recvCount == g_cliStates.chunks) {
       g_cliStates.state = TRANSFER_FINISHED;
+      debug(stderr, "all right!\n");
       return true;
     }
   }
+  debug(stderr, "all right2\n");
   return true;
 }
 
@@ -198,6 +212,7 @@ int sendAcks() {
       }
       return -1;
     } else if (ret == 0) {
+      perror("send acks error");
       return -1;
     } else {
       pos += ret;
@@ -230,9 +245,10 @@ bool packAndSendAcks(bool force) {
     *p = g_cliStates.waitForAckChunks.front();
     g_cliStates.waitForAckChunks.pop();
     ++p;
+    --count;
   }
   g_cliStates.tcpOutBufferWritePos = (unsigned char*)p - g_cliStates.tcpOutBuffer;
-
+  debug(stderr, "try send acks!\n");
   // 再次尝试发送
   return (sendAcks() != -1);
 }
@@ -259,6 +275,7 @@ int main(int argc, char** argv) {
   char* uri = argv[2];
   char* savepath = argv[3];
   g_cliStates.uri = uri;
+  g_cliStates.path = savepath;
 
   if (!g_cliStates.init(host)) {
     return 1;
@@ -282,13 +299,17 @@ int main(int argc, char** argv) {
               return 1;
             }
           } else if (g_cliStates.state == TRANSFER_FINISHED) {
+            debug(stderr, "Transfer finished!\n");
             if (!packAndSendAcks(true)) {
               fprintf(stderr, "WARNING: transfer finished,but the last ack pack not send!\n");
               g_cliStates.transferFinish();
               return 0;
             }
+            debug(stderr, "packAndSendAcks finished!\n");
             if (g_cliStates.waitForAckChunks.empty() && g_cliStates.tcpOutBufferReadPos == g_cliStates.tcpOutBufferWritePos) {
+              debug(stderr, "transfer finish begin!\n");
               g_cliStates.transferFinish();
+              debug(stderr, "transfer finish end!\n");
               return 0;
             }
           }

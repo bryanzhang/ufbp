@@ -84,6 +84,7 @@ struct ClientStates {
     fd = -1;
     rename((path + ".tmp").c_str(), path.c_str());
     delete recvMap;
+    recvMap = NULL;
   }
 
   bool initUdp() {
