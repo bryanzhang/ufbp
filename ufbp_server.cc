@@ -43,17 +43,18 @@ bool sendRespPacket(int socket, unsigned char* buffer, unsigned short code, unsi
   return true;
 }
 
-bool handleAckPacket(TransferState& state, AckPackHeader* ack, int len) {
+// 返回-1表示出错,0表示finish,1表示其他成功的情况
+int handleAckPacket(TransferState& state, AckPackHeader* ack, int len) {
   if (len < sizeof(AckPackHeader)) {
     fprintf(stderr, "WARNING: ack pack len %d < %d\n", len, sizeof(AckPackHeader));
-    return false;
+    return -1;
   }
 
   len -= sizeof(AckPackHeader);
   fprintf(stderr, "recv ack: %d\n", ack->count);
   if (len != sizeof(unsigned int) * ack->count) {
     fprintf(stderr, "WARNING: remain len %d != %d\n", len, sizeof(unsigned int) * ack->count);
-    return false;
+    return -1;
   }
 
   unsigned int* start = (unsigned int*)(ack + 1);
@@ -62,8 +63,11 @@ bool handleAckPacket(TransferState& state, AckPackHeader* ack, int len) {
     state.acknowledge(*p);
   }
   if (state.finished()) {
+    debug(stderr, "finished!\n");
     g_svStates.removeTransferState(state.socket);
+    return 0;
   }
+  return 1;
 }
 
 bool handleReqPacket(TransferState& state, ReqPackHeader* req, int len) {
@@ -141,20 +145,25 @@ bool handleReqPacket(TransferState& state, ReqPackHeader* req, int len) {
   return sendRespPacket(state.socket, g_svStates.tcpOutBuffer, code, resId, fileLength, lastModifiedDate) && code == 200;
 }
 
-bool handleTcpPacket(TransferState& state, PackHeader* pack) {
-  fprintf(stderr, "Pack len:%d\n", (int)pack->len);
+// -1表示失败,0表示finish,1为成功
+int handleTcpPacket(TransferState& state, PackHeader* pack) {
   int len = pack->len - sizeof(PackHeader);
+  if (len < 0) {
+    fprintf(stderr, "len:%d\n", len);
+    return -1;
+  }
+
   if (state.pending) {
     if (memcmp(pack->type, REQPACK_TYPE, PACKTYPE_LENGTH)) {
       fprintf(stderr, "Unexpected packet type:%.*s\n", PACKTYPE_LENGTH, pack->type);
-      return false;
+      return -1;
     }
     ReqPackHeader* req = (ReqPackHeader*)(pack + 1);
     return handleReqPacket(state, req, len);
   } else {
     if (memcmp(pack->type, ACKPACK_TYPE, PACKTYPE_LENGTH)) {
       fprintf(stderr, "Unexpected packet type:%.*s\n", PACKTYPE_LENGTH, pack->type);
-      return false;
+      return -1;
     }
     AckPackHeader* ack = (AckPackHeader*)(pack + 1);
     return handleAckPacket(state, ack, len);
@@ -163,7 +172,7 @@ bool handleTcpPacket(TransferState& state, PackHeader* pack) {
 
 bool transfer() {
   while (!g_svStates.transferQueue.empty()) {
-    debug(stderr, "Buffer:%d\n", g_svStates.transferQueue.size());
+    // debug(stderr, "Buffer:%d\n", g_svStates.transferQueue.size());
     unsigned short len = g_svStates.transferQueue.front();
     if (sendto(g_svStates.broadcastSocket, g_svStates.transferBuffer + g_svStates.transferBufferReadPos, len, 0, (struct sockaddr*)&g_svStates.siBroadcast, sizeof(g_svStates.siBroadcast)) == -1) {
       if (errno == EAGAIN) {
@@ -182,7 +191,7 @@ bool transfer() {
 }
 
 void prepareTransferPacket(UriState& uriState, int chunk) {
-  long pos = CHUNK_SIZE * chunk;
+  long pos = (long)CHUNK_SIZE * chunk;
   long remaining = (uriState.fileLength - pos);
   unsigned short len = (remaining >= CHUNK_SIZE ? CHUNK_SIZE : (unsigned short)remaining);
 
@@ -208,15 +217,16 @@ void schedule() {
     state = *itr;
     uriState = g_svStates.uriStates[state->uri];
 
-    // 如果队列满了,选择发送在该队列中却不在全局队列中的chunk(如果网络可靠、队列长一些,走该分支可能性小一些,通常是的确丢了的包)
-    if (state->waitForAckChunkMap.size() >= 5000) {
-      debug(stderr, "hello\n");
+    // 如果队列满了或已经发完一遍,选择发送在该队列中却不在全局队列中的chunk(如果网络可靠、队列长一些,走该分支可能性小一些,通常是的确丢了的包)
+    if (state->waitForAckChunkMap.size() >= 5000 ||  state->sendPos == state->chunks) {
+      // debug(stderr, "hello\n");
       for (chunkItr = state->waitForAckChunkList.begin(); chunkItr != state->waitForAckChunkList.end();) {
         chunk = &(*chunkItr);
         if (uriState->recentSendChunkMap.find(chunk->pos) != uriState->recentSendChunkMap.end()) {
           ++chunkItr;
           continue;
         }
+        // debug(stderr, "pointer=%lld, pos=%d\n", uriState, state->sendPos);
         prepareTransferPacket(*uriState, chunk->pos);
         chunk->lastSendTime = g_svStates.now;
         curChunkItr = chunkItr;
@@ -232,23 +242,23 @@ void schedule() {
       }
     // 队列未满的情况下,sendPos继续往前走(没有ack的包)
     } else {
-      debug(stderr, "hi, chunks=%d\n", state->chunks);
+      // debug(stderr, "hi, chunks=%d\n", state->chunks);
       while (state->sendPos < state->chunks) {
-        debug(stderr, "hi1\n");
+        // debug(stderr, "hi1\n");
         if (state->hasAcked(state->sendPos)) {
           ++(state->sendPos);
           continue;
         }
-        debug(stderr, "hi2\n");
-        debug(stderr, "pointer=%lld, pos=%d\n", uriState, state->sendPos);
+        // debug(stderr, "hi2\n");
+        // debug(stderr, "pointer=%lld, pos=%d\n", uriState, state->sendPos);
         prepareTransferPacket(*uriState, state->sendPos);
-        debug(stderr, "hi3\n");
+        // debug(stderr, "hi3\n");
         c.pos = state->sendPos;
         c.lastSendTime = g_svStates.now;
         state->updateWaitForChunk(c);
-        debug(stderr, "hi4\n");
+        // debug(stderr, "hi4\n");
         uriState->updateRecentSendChunk(c);
-        debug(stderr, "hi5\n");
+        // debug(stderr, "hi5\n");
         ++(state->sendPos);
         if (g_svStates.udpOutBufferFull()) {
           return;
@@ -256,7 +266,7 @@ void schedule() {
       }
     }
   }
-  debug(stderr, "schedule all right!\n");
+  // debug(stderr, "schedule all right!\n");
 }
 
 void acceptConn() {
@@ -335,23 +345,29 @@ void handleTcpInput(int socket) {
     itr->second = (--g_svStates.transferStateList.end());
   }
 
+  int handleResult = 0;
   for (; ;) {
+    debug(stderr, "Remaining is: %d\n", state->tcpInBufferWritePos - state->tcpInBufferReadPos);
     if (state->tcpInBufferWritePos - state->tcpInBufferReadPos < sizeof(PackHeader)) {
       break;
     }
 
+    debug(stderr, "pos: %d\n", state->tcpInBufferReadPos);
     PackHeader* header = (PackHeader*)(state->tcpInBuffer + state->tcpInBufferReadPos); 
     if (state->tcpInBufferWritePos - state->tcpInBufferReadPos < header->len) {
       break;
     }
 
-    if (!handleTcpPacket(*state, header)) {
+    handleResult = handleTcpPacket(*state, header);
+    if (handleResult == -1) {
       fprintf(stderr, "Exception occurs when handle input socket, socket=%d\n", state->socket);
       if (state->pending) {
         g_svStates.removePendingState(itr);
       } else {
         g_svStates.removeTransferState(itr);
       }
+      return;
+    } else if (handleResult == 0) {
       return;
     }
 
@@ -370,10 +386,10 @@ void updateTime() {
 }
 
 void removeInactives() {
-  // pending和transfer中时间超过5秒的要做处理
+  // pending和transfer中时间超过20秒的要做处理
   TransferState* state = NULL;
   std::list<TransferState*>::iterator curItr;
-  long expireTime = g_svStates.now - 5000;
+  long expireTime = g_svStates.now - 20000;
   // debug(stderr, "removing inactives\n");
   for (std::list<TransferState*>::iterator itr = g_svStates.pendingStateList.begin(); itr != g_svStates.pendingStateList.end();) {
     state = *itr;
@@ -383,6 +399,7 @@ void removeInactives() {
     curItr = itr;
     ++itr;
     g_svStates.removePendingState(curItr);
+    debug(stderr, "remove pending!\n");
   }
 
   // debug(stderr, "removing 2\n");
@@ -394,6 +411,7 @@ void removeInactives() {
     curItr = itr;
     ++itr;
     g_svStates.removeTransferState(curItr);
+    debug(stderr, "remove!\n");
   }
 
   // debug(stderr, "removing 3\n");
@@ -412,9 +430,8 @@ int main() {
   }
 
   int nfds = 0;
-  bool udpReady = false;
   for (; ;) {
-    nfds = epoll_wait(g_svStates.epfd, g_svStates.events, 20, 1000);
+    nfds = epoll_wait(g_svStates.epfd, g_svStates.events, 20, 10);
     updateTime();
     for (int i = 0; i < nfds; ++i) {
       if (g_svStates.events[i].data.fd == g_svStates.tcpSocket) {
@@ -424,7 +441,9 @@ int main() {
 
       if (g_svStates.events[i].data.fd == g_svStates.broadcastSocket) {
         if (g_svStates.events[i].events & EPOLLOUT) {
-          udpReady = true;
+          if (!transfer()) {
+            return 1;
+          }
         }
         continue;
       }
@@ -437,11 +456,6 @@ int main() {
 
     removeInactives();
     schedule();
-    if (udpReady) {
-      if (!transfer()) {
-        return 1;
-      }
-    }
   }
 
   return 0;

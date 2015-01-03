@@ -161,17 +161,17 @@ bool handleData() {
       fprintf(stderr, "transpack is too short!\n");
       return false;
     }
-    long pos = trans->chunk * CHUNK_SIZE;
+    long pos = trans->chunk * (long)CHUNK_SIZE;
     long fileRemaining = (trans->fileLength - pos);
-    int chunkSize = (fileRemaining <= CHUNK_SIZE ? fileRemaining : CHUNK_SIZE);
+    int chunkSize = (fileRemaining <= (long)CHUNK_SIZE ? fileRemaining : CHUNK_SIZE);
     if (len != chunkSize) {
-      fprintf(stderr, "chunkSize error!\n");
+      fprintf(stderr, "chunkSize error!chunkSize=%d, len=%d\n", chunkSize, len);
       return false;
     }
 
-    debug(stderr, "resId: %lld, %lld\n", g_cliStates.resId, trans->resId);
-    debug(stderr, "fileLength: %lld, %lld\n", g_cliStates.fileLength, trans->fileLength);
-    debug(stderr, "lastModified: %lld, %lld\n", g_cliStates.lastModifiedDate, trans->lastModifiedDate);
+    // debug(stderr, "resId: %lld, %lld\n", g_cliStates.resId, trans->resId);
+    // debug(stderr, "fileLength: %lld, %lld\n", g_cliStates.fileLength, trans->fileLength);
+    // debug(stderr, "lastModified: %lld, %lld\n", g_cliStates.lastModifiedDate, trans->lastModifiedDate);
     if (g_cliStates.resId != trans->resId || g_cliStates.fileLength != trans->fileLength || g_cliStates.lastModifiedDate != trans->lastModifiedDate) {
       debug(stderr, "not related!\n");
       continue;
@@ -182,29 +182,29 @@ bool handleData() {
       continue;
     }
 
-    debug(stderr, "trans recved: %d\n", trans->chunk);
-    debug(stderr, "cpy\n");
+    debug(stderr, "trans recved: %d, size=%d\n", trans->chunk, g_cliStates.waitForAckChunks.size());
+    // debug(stderr, "cpy\n");
     memcpy((char*)g_cliStates.mmap_addr + pos, trans + 1, chunkSize);
     g_cliStates.waitForAckChunks.push(trans->chunk);
     g_cliStates.setRecved(trans->chunk);
-    debug(stderr, "setrecved!\n");
     ++g_cliStates.recvCount;
+    debug(stderr, "recv: %d, %d\n", g_cliStates.recvCount, g_cliStates.chunks);
     if (g_cliStates.recvCount == g_cliStates.chunks) {
       g_cliStates.state = TRANSFER_FINISHED;
-      debug(stderr, "all right!\n");
+      debug(stderr, "right!\n");
       return true;
     }
   }
-  debug(stderr, "all right2\n");
   return true;
 }
 
 // 返回剩余的字节数,-1表示出错
 int sendAcks() {
-  unsigned char* pos = g_cliStates.tcpOutBuffer + g_cliStates.tcpOutBufferWritePos;
+  unsigned char* pos = g_cliStates.tcpOutBuffer + g_cliStates.tcpOutBufferReadPos;
   int remaining = g_cliStates.tcpOutBufferWritePos - g_cliStates.tcpOutBufferReadPos;
   int ret;
   while (remaining > 0) {
+    debug(stderr, "Remaining: %d\n", remaining);
     ret = write(g_cliStates.tcpSocket, pos, remaining);
     if (ret == -1) {
       if (errno == EAGAIN) {
@@ -215,6 +215,7 @@ int sendAcks() {
       perror("send acks error");
       return -1;
     } else {
+      debug(stderr, "Ret: %d\n", ret);
       pos += ret;
       remaining -= ret;
       g_cliStates.tcpOutBufferReadPos += ret;
@@ -241,6 +242,7 @@ bool packAndSendAcks(bool force) {
 
   unsigned short count = std::min((size_t)15 * 1024, g_cliStates.waitForAckChunks.size());
   unsigned int* p = ackpack_init((PackHeader*)g_cliStates.tcpOutBuffer, count);
+  debug(stderr, "count: %d\n", count);
   while (count) {
     *p = g_cliStates.waitForAckChunks.front();
     g_cliStates.waitForAckChunks.pop();
@@ -248,7 +250,7 @@ bool packAndSendAcks(bool force) {
     --count;
   }
   g_cliStates.tcpOutBufferWritePos = (unsigned char*)p - g_cliStates.tcpOutBuffer;
-  debug(stderr, "try send acks!\n");
+  debug(stderr, "tcpOutBufferWritePos = %d, try send acks!\n", g_cliStates.tcpOutBufferWritePos);
   // 再次尝试发送
   return (sendAcks() != -1);
 }
@@ -314,6 +316,7 @@ int main(int argc, char** argv) {
             }
           }
         }
+
         if (g_cliStates.events[i].events & EPOLLIN) {
           if (g_cliStates.state == WAITFOR_RESP) {
             if (!handleResp()) {
@@ -325,7 +328,7 @@ int main(int argc, char** argv) {
         if (g_cliStates.events[i].events & EPOLLIN) {
           if (g_cliStates.state == TRANSFER) {
             if (!handleData()) {
-              return false;
+              return 1;
             }
           }
         }

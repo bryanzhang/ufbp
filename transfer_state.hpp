@@ -53,6 +53,7 @@ struct TransferState {
       return;
     }
 
+    debug(stderr, "ack: %d,%d,%d\n", chunk, sendPos, waitForAckChunkMap.size());
     waitForAckChunkList.erase(itr->second);
     waitForAckChunkMap.erase(itr);
   }
@@ -69,8 +70,7 @@ struct TransferState {
     __gnu_cxx::hash_map<int, std::list<ChunkState>::iterator>::iterator itr = waitForAckChunkMap.find(chunk.pos);
     waitForAckChunkList.push_back(chunk);
     if (itr != waitForAckChunkMap.end()) {
-      std::list<ChunkState>::iterator& listItr = itr->second;
-      waitForAckChunkList.erase(listItr);
+      waitForAckChunkList.erase(itr->second);
       itr->second = (--waitForAckChunkList.end());
     } else {
       waitForAckChunkMap[chunk.pos] = (--waitForAckChunkList.end());

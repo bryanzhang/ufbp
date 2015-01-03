@@ -53,7 +53,7 @@ struct ClientStates {
   unsigned int* recvMap;
   int recvCount;
 
-  std::queue<int> waitForAckChunks;
+  std::queue<unsigned int> waitForAckChunks;
   long lastAckTime;
 
   inline ClientStates() : now(0), epfd(-1), udpSocket(-1),
@@ -76,6 +76,7 @@ struct ClientStates {
   }
 
   void transferFinish() {
+    time_t oldTime = time(NULL);
     close(tcpSocket);
     tcpSocket = -1;
     munmap(mmap_addr, fileLength);
@@ -85,6 +86,7 @@ struct ClientStates {
     rename((path + ".tmp").c_str(), path.c_str());
     delete recvMap;
     recvMap = NULL;
+    debug(stderr, "use %d seconds.\n", time(NULL) - oldTime);
   }
 
   bool initUdp() {
@@ -139,11 +141,11 @@ struct ClientStates {
     epfd = epoll_create(256);
     struct epoll_event ev;
     ev.data.fd = udpSocket;
-    ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+    ev.events = (EPOLLIN | EPOLLOUT/* | EPOLLET*/);
     epoll_ctl(epfd, EPOLL_CTL_ADD, udpSocket, &ev);
 
     ev.data.fd = tcpSocket;
-    ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+    ev.events = (EPOLLIN | EPOLLOUT/* | EPOLLET*/);
     epoll_ctl(epfd, EPOLL_CTL_ADD, tcpSocket, &ev);
     return true;
   }

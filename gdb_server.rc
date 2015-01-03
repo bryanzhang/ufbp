@@ -1,0 +1,2 @@
+file ufbp_server
+set solib-search-path /lib64:/usr/lib64

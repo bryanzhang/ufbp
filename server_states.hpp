@@ -49,13 +49,13 @@ struct ServerStates {
   unsigned char tcpOutBuffer[BUFFER_SIZE];  // global tcp outbuffer, no state.
 
   // udp transfer buffer related states.
-  unsigned char transferBuffer[BUFFER_SIZE];
+  unsigned char transferBuffer[TRANSFER_BUFFER_SIZE];
   int transferBufferReadPos;
   int transferBufferWritePos;
   std::queue<unsigned short> transferQueue;
 
   inline ServerStates() : now(0), hostId(88), secs(0), inc(0),
-      epfd(-1), tcpSocket(-1), broadcastSocket(-1),
+      epfd(-1), tcpSocket(-1), broadcastSocket(-1), 
       transferBufferReadPos(0), transferBufferWritePos(0) {
     siBroadcast.sin_family = AF_INET;
     siBroadcast.sin_port = htons(UFBP_CLIENT_PORT);
@@ -135,10 +135,10 @@ struct ServerStates {
     }
     struct epoll_event ev;
     ev.data.fd = broadcastSocket;
-    ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+    ev.events = (EPOLLIN | EPOLLOUT);
     epoll_ctl(epfd, EPOLL_CTL_ADD, broadcastSocket, &ev);
     ev.data.fd = tcpSocket;
-    ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+    ev.events = (EPOLLIN | EPOLLOUT);
     epoll_ctl(epfd, EPOLL_CTL_ADD, tcpSocket, &ev);
     return true;
   }
@@ -146,7 +146,7 @@ struct ServerStates {
   void epollRemove(int socket) {
     struct epoll_event ev;
     ev.data.fd = socket;
-    ev.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+    ev.events = (EPOLLIN | EPOLLOUT);
     epoll_ctl(epfd, EPOLL_CTL_DEL, socket, &ev);
   }
 

@@ -4,3 +4,4 @@ a.out
 *.swp
 tags
 out_sample_file
+core.*
