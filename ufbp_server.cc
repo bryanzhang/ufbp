@@ -240,7 +240,7 @@ void schedule() {
           return;
         }
       }
-    // 队列未满的情况下,sendPos继续往前走(没有ack的包)
+    // 队列未满的情况下,sendPos继续往前走(没有ack的包,没有在全局map中)
     } else {
       // debug(stderr, "hi, chunks=%d\n", state->chunks);
       while (state->sendPos < state->chunks) {
@@ -248,6 +248,9 @@ void schedule() {
         if (state->hasAcked(state->sendPos)) {
           ++(state->sendPos);
           continue;
+        }
+        if (uriState->recentSendChunkMap.find(state->sendPos) != uriState->recentSendChunkMap.end()) {
+          break;
         }
         // debug(stderr, "hi2\n");
         // debug(stderr, "pointer=%lld, pos=%d\n", uriState, state->sendPos);
@@ -389,7 +392,7 @@ void removeInactives() {
   // pending和transfer中时间超过20秒的要做处理
   TransferState* state = NULL;
   std::list<TransferState*>::iterator curItr;
-  long expireTime = g_svStates.now - 20000;
+  long expireTime = g_svStates.now - 5000;
   // debug(stderr, "removing inactives\n");
   for (std::list<TransferState*>::iterator itr = g_svStates.pendingStateList.begin(); itr != g_svStates.pendingStateList.end();) {
     state = *itr;

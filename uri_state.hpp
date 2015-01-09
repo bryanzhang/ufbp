@@ -46,8 +46,7 @@ struct UriState {
     recentSendChunkList.push_back(chunk);
     __gnu_cxx::hash_map<int, std::list<ChunkState>::iterator>::iterator itr = recentSendChunkMap.find(chunk.pos);
     if (itr != recentSendChunkMap.end()) {
-      std::list<ChunkState>::iterator listItr = itr->second;
-      recentSendChunkList.erase(listItr);
+      recentSendChunkList.erase(itr->second);
       itr->second = (--recentSendChunkList.end());
     } else {
       recentSendChunkMap[chunk.pos] = (--(recentSendChunkList.end()));
